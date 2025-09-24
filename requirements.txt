@@ -1,3 +1,5 @@
-discord.py>=2.3.0
-requests
+discord.py
+transformers
+torch
 flask
+matplotlib
