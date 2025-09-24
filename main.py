@@ -1,16 +1,18 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
-import os
+from discord import option
 import json
-import requests
+from datetime import datetime
+import matplotlib.pyplot as plt
+from io import BytesIO
 from threading import Thread
 from flask import Flask
+import os
 
 # -------------------
-# Flask setup (dummy web server)
+# Flask server for Render keep-alive
 # -------------------
-app = Flask("")
+app = Flask(__name__)
 
 @app.route("/")
 def home():
@@ -19,107 +21,186 @@ def home():
 def run_flask():
     app.run(host="0.0.0.0", port=5000)
 
-Thread(target=run_flask).start()  # Run Flask in a separate thread
+Thread(target=run_flask).start()
 
 # -------------------
-# Discord bot setup
+# Bot setup
 # -------------------
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="/", intents=intents)
-tree = bot.tree  # app_commands tree
 
-CONFIG_FILE = "config.json"
+# -------------------
+# Load or initialize JSON
+# -------------------
+DATA_FILE = "data.json"
+try:
+    with open(DATA_FILE, "r") as f:
+        data = json.load(f)
+except FileNotFoundError:
+    data = {"translate_channels": {}, "entries": []}
 
-# Load or create config
-if not os.path.isfile(CONFIG_FILE):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump({"translate_channel_id": None}, f)
+# -------------------
+# Helper functions
+# -------------------
+def save_data():
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-with open(CONFIG_FILE, "r") as f:
-    config = json.load(f)
+def translate_message(text, pair):
+    from transformers import pipeline
+    if pair == "en-uk":
+        if any("\u0400" <= c <= "\u04FF" for c in text):  # Ukrainian letters
+            model = "Helsinki-NLP/opus-mt-uk-en"
+        else:
+            model = "Helsinki-NLP/opus-mt-en-uk"
+    elif pair == "en-ko":
+        if any("\uAC00" <= c <= "\uD7AF" for c in text):  # Korean letters
+            model = "Helsinki-NLP/opus-mt-ko-en"
+        else:
+            model = "Helsinki-NLP/opus-mt-en-ko"
+    translator = pipeline("translation", model=model, device=-1)
+    result = translator(text, max_length=512)
+    return result[0]['translation_text']
 
-HF_API_KEY = os.environ["HF_API_KEY"]
-DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
+# -------------------
+# Commands
+# -------------------
 
-# Translation function
-def translate_text(text):
-    if any("а" <= c <= "я" or c in "іїєґ" for c in text.lower()):
-        model = "Helsinki-NLP/opus-mt-uk-en"
-        prefix = "🇺🇦 ➝ 🇺🇸"
-    else:
-        model = "Helsinki-NLP/opus-mt-en-uk"
-        prefix = "🇺🇸 ➝ 🇺🇦"
+# 1. Set translation channel
+@bot.slash_command(name="setchannel", description="Set a translation channel")
+@option("channel", discord.TextChannel, description="Select the channel")
+@option("language_pair", str, description="Choose language pair (en-uk or en-ko)")
+async def setchannel(ctx, channel, language_pair):
+    if language_pair not in ["en-uk", "en-ko"]:
+        await ctx.respond("Invalid language pair! Use 'en-uk' or 'en-ko'.")
+        return
+    data["translate_channels"][str(channel.id)] = language_pair
+    save_data()
+    await ctx.respond(f"Channel {channel.mention} set to {language_pair} translation.")
 
-    payload = {"inputs": text}
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+# 2. Log number
+@bot.slash_command(name="log", description="Log a number with a name")
+@option("name", str, description="Name/label for the entry")
+@option("value", int, description="Number to log")
+async def log(ctx, name, value):
+    entry = {
+        "name": name,
+        "value": value,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    data["entries"].append(entry)
+    save_data()
+    await ctx.respond(f"Logged {value} for {name} at {entry['timestamp']}.")
 
+# 3. Report
+@bot.slash_command(name="report", description="Show report for a name or all names")
+@option("start", str, description="Start timestamp YYYY-MM-DDTHH:MM")
+@option("end", str, description="End timestamp YYYY-MM-DDTHH:MM")
+@option("name", str, description="Name to filter or 'all' for all names")
+async def report(ctx, start, end, name):
     try:
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{model}",
-            headers=headers,
-            json=payload,
-            timeout=10
-        )
-        response.raise_for_status()
-        result = response.json()
-        translated = result[0]["translation_text"]
-        return f"{prefix}: {translated}"
-    except Exception:
-        return "⚠️ Translation unavailable, please try again."
-
-# Slash commands
-@tree.command(name="setchannel", description="Set the translation channel")
-@app_commands.describe(channel="The channel to translate messages in")
-async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You must be an admin to do this.", ephemeral=True)
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+    except:
+        await ctx.respond("Invalid timestamp format! Use YYYY-MM-DDTHH:MM")
         return
 
-    config["translate_channel_id"] = channel.id
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
-    await interaction.response.send_message(f"✅ Translation channel set to {channel.mention}")
+    filtered = [e for e in data["entries"] if start_dt <= datetime.fromisoformat(e["timestamp"]) <= end_dt]
+    if name.lower() != "all":
+        filtered = [e for e in filtered if e["name"].lower() == name.lower()]
 
-@tree.command(name="unsetchannel", description="Unset the translation channel")
-async def unsetchannel(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You must be an admin to do this.", ephemeral=True)
+    if not filtered:
+        await ctx.respond("No entries found.")
         return
 
-    config["translate_channel_id"] = None
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
-    await interaction.response.send_message("✅ Translation channel cleared")
+    # Build table
+    table = "Name | Value | Timestamp\n"
+    table += "--- | --- | ---\n"
+    for e in filtered:
+        table += f"{e['name']} | {e['value']} | {e['timestamp']}\n"
+    await ctx.respond(f"```\n{table}\n```")
 
-@tree.command(name="status", description="Show the current translation channel")
-async def status(interaction: discord.Interaction):
-    channel_id = config.get("translate_channel_id")
-    if channel_id:
-        channel = bot.get_channel(channel_id)
-        await interaction.response.send_message(f"Current translation channel: {channel.mention}")
+# 4. Graph
+@bot.slash_command(name="graph", description="Show a graph for a name or all names")
+@option("start", str, description="Start timestamp YYYY-MM-DDTHH:MM")
+@option("end", str, description="End timestamp YYYY-MM-DDTHH:MM")
+@option("name", str, description="Name to graph or 'all' for all names")
+async def graph(ctx, start, end, name):
+    try:
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+    except:
+        await ctx.respond("Invalid timestamp format! Use YYYY-MM-DDTHH:MM")
+        return
+
+    filtered = [e for e in data["entries"] if start_dt <= datetime.fromisoformat(e["timestamp"]) <= end_dt]
+    if name.lower() != "all":
+        filtered = [e for e in filtered if e["name"].lower() == name.lower()]
+
+    if not filtered:
+        await ctx.respond("No entries found.")
+        return
+
+    plt.figure(figsize=(8,5))
+    if name.lower() == "all":
+        names = set(e["name"] for e in filtered)
+        for n in names:
+            vals = [e["value"] for e in filtered if e["name"]==n]
+            times = [e["timestamp"][11:16] for e in filtered if e["name"]==n]
+            plt.plot(times, vals, marker='o', label=n)
+        plt.legend()
     else:
-        await interaction.response.send_message("No translation channel set.")
+        vals = [e["value"] for e in filtered]
+        times = [e["timestamp"][11:16] for e in filtered]
+        plt.plot(times, vals, marker='o')
+    plt.title("Stats Graph")
+    plt.xlabel("Time")
+    plt.ylabel("Value")
 
-# On message event
+    buf = BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    await ctx.send(file=discord.File(buf, "graph.png"))
+    plt.close()
+
+# 5. Delete entries
+@bot.slash_command(name="delete", description="Delete all entries for a name")
+@option("name", str, description="Name to delete or 'all' for everything")
+async def delete(ctx, name):
+    global data
+    if name.lower() == "all":
+        data["entries"] = []
+        save_data()
+        await ctx.respond("All entries deleted.")
+        return
+
+    before = len(data["entries"])
+    data["entries"] = [e for e in data["entries"] if e["name"].lower() != name.lower()]
+    after = len(data["entries"])
+    save_data()
+    deleted_count = before - after
+    if deleted_count == 0:
+        await ctx.respond(f"No entries found for '{name}'.")
+    else:
+        await ctx.respond(f"Deleted {deleted_count} entries for '{name}'.")
+
+# -------------------
+# Event listener for translation
+# -------------------
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-
-    channel_id = config.get("translate_channel_id")
-    if channel_id and message.channel.id == channel_id:
-        translated = translate_text(message.content)
+    channel_id = str(message.channel.id)
+    if channel_id in data["translate_channels"]:
+        pair = data["translate_channels"][channel_id]
+        translated = translate_message(message.content, pair)
         await message.channel.send(translated)
-
     await bot.process_commands(message)
 
-# On ready
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"🤖 {bot.user} is online and ready!")
-
+# -------------------
 # Run bot
-bot.run(DISCORD_TOKEN)
+# -------------------
+TOKEN = os.getenv("DISCORD_TOKEN")
+bot.run(TOKEN)
