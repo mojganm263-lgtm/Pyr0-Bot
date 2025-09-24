@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from discord import option
+from discord.commands import option  # <-- py-cord slash command decorator
 import json
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -114,7 +114,6 @@ async def report(ctx, start, end, name):
         await ctx.respond("No entries found.")
         return
 
-    # Build table
     table = "Name | Value | Timestamp\n"
     table += "--- | --- | ---\n"
     for e in filtered:
