@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os
 import json
@@ -9,6 +10,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
+tree = bot.tree  # app_commands tree for slash commands
 
 CONFIG_FILE = "config.json"
 
@@ -25,20 +27,17 @@ DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 
 # Function to detect language and translate
 def translate_text(text):
-    url = "https://api-inference.huggingface.co/models/Helsinki-NLP/opus-mt-en-uk"
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-
-    # Detect English letters for simplicity
+    # Detect English vs Ukrainian
     if any("а" <= c <= "я" or c in "іїєґ" for c in text.lower()):
-        # Ukrainian → English
         model = "Helsinki-NLP/opus-mt-uk-en"
         prefix = "🇺🇦 ➝ 🇺🇸"
     else:
-        # English → Ukrainian
         model = "Helsinki-NLP/opus-mt-en-uk"
         prefix = "🇺🇸 ➝ 🇺🇦"
 
     payload = {"inputs": text}
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+
     try:
         response = requests.post(
             f"https://api-inference.huggingface.co/models/{model}",
@@ -54,36 +53,37 @@ def translate_text(text):
         return "⚠️ Translation unavailable, please try again."
 
 # Slash commands
-@bot.slash_command(name="setchannel", description="Set the translation channel")
-async def setchannel(ctx, channel: discord.TextChannel):
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.respond("❌ You must be an admin to do this.", ephemeral=True)
+@tree.command(name="setchannel", description="Set the translation channel")
+@app_commands.describe(channel="The channel to translate messages in")
+async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You must be an admin to do this.", ephemeral=True)
         return
 
     config["translate_channel_id"] = channel.id
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
-    await ctx.respond(f"✅ Translation channel set to {channel.mention}")
+    await interaction.response.send_message(f"✅ Translation channel set to {channel.mention}")
 
-@bot.slash_command(name="unsetchannel", description="Unset the translation channel")
-async def unsetchannel(ctx):
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.respond("❌ You must be an admin to do this.", ephemeral=True)
+@tree.command(name="unsetchannel", description="Unset the translation channel")
+async def unsetchannel(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You must be an admin to do this.", ephemeral=True)
         return
 
     config["translate_channel_id"] = None
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f)
-    await ctx.respond("✅ Translation channel cleared")
+    await interaction.response.send_message("✅ Translation channel cleared")
 
-@bot.slash_command(name="status", description="Show the current translation channel")
-async def status(ctx):
+@tree.command(name="status", description="Show the current translation channel")
+async def status(interaction: discord.Interaction):
     channel_id = config.get("translate_channel_id")
     if channel_id:
         channel = bot.get_channel(channel_id)
-        await ctx.respond(f"Current translation channel: {channel.mention}")
+        await interaction.response.send_message(f"Current translation channel: {channel.mention}")
     else:
-        await ctx.respond("No translation channel set.")
+        await interaction.response.send_message("No translation channel set.")
 
 # On message event
 @bot.event
@@ -101,6 +101,7 @@ async def on_message(message):
 # On ready
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     print(f"🤖 {bot.user} is online and ready!")
 
 bot.run(DISCORD_TOKEN)
