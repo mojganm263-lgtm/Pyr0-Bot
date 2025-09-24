@@ -4,13 +4,31 @@ from discord.ext import commands
 import os
 import json
 import requests
+from threading import Thread
+from flask import Flask
 
-# Intents
+# -------------------
+# Flask setup (dummy web server)
+# -------------------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=5000)
+
+Thread(target=run_flask).start()  # Run Flask in a separate thread
+
+# -------------------
+# Discord bot setup
+# -------------------
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
-tree = bot.tree  # app_commands tree for slash commands
+tree = bot.tree  # app_commands tree
 
 CONFIG_FILE = "config.json"
 
@@ -25,9 +43,8 @@ with open(CONFIG_FILE, "r") as f:
 HF_API_KEY = os.environ["HF_API_KEY"]
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 
-# Function to detect language and translate
+# Translation function
 def translate_text(text):
-    # Detect English vs Ukrainian
     if any("а" <= c <= "я" or c in "іїєґ" for c in text.lower()):
         model = "Helsinki-NLP/opus-mt-uk-en"
         prefix = "🇺🇦 ➝ 🇺🇸"
@@ -104,4 +121,5 @@ async def on_ready():
     await bot.tree.sync()
     print(f"🤖 {bot.user} is online and ready!")
 
+# Run bot
 bot.run(DISCORD_TOKEN)
