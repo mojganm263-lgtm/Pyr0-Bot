@@ -33,10 +33,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command("help")
 
 DATA_FILE = "data.json"
-
-# -------------------------
-# Supported language codes
-# -------------------------
 SUPPORTED_LANGS = ["en", "uk", "ko", "pt"]
 
 # -------------------------
@@ -75,7 +71,6 @@ def detect_language(text: str):
         if isinstance(result, list) and result:
             best = max(result[0], key=lambda x: x["score"])
             detected = best["label"].lower().strip()
-            print(f"🔎 Detected language: {detected}")
             code_map = {"english": "en", "ukrainian": "uk", "korean": "ko", "portuguese": "pt",
                         "en": "en", "uk": "uk", "ko": "ko", "pt": "pt"}
             return code_map.get(detected)
@@ -144,14 +139,15 @@ async def on_message(message: discord.Message):
         target = langs[1] if detected_code == langs[0] else langs[0]
         translated = translate_text(message.content, detected_code, target)
         await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
+        print(f"Translated in channel {message.channel.id} from {detected_code} to {target}")
 
-    # Reverse translation (translate all messages to a fixed language)
+    # Reverse translation
     if str(message.channel.id) in reverse_channels:
-        # pick the first language in pair as target, or default to English
         target = langs[0] if langs else "en"
         if detected_code != target:
             translated = translate_text(message.content, detected_code, target)
             await message.reply(f"🔄 Reverse ({target}): {translated}")
+            print(f"Reverse translated in channel {message.channel.id} from {detected_code} to {target}")
 
     await bot.process_commands(message)
 
@@ -202,12 +198,34 @@ async def help_cmd(interaction: discord.Interaction):
         "/setchannel [lang1] [lang2] - set translation pair",
         "/setreverse - enable reverse translation",
         "/removereverse - disable reverse translation",
+        "/listchannels - show all translation channels",
         "/addentry [name] [number] - add number entry",
         "/showtable [name/all] - show entries",
         "/showgraph [name/all] - show graph",
         "/removeentry [name] - remove entries"
     ]
     await interaction.response.send_message("📜 Commands:\n" + "\n".join(commands_list), ephemeral=True)
+
+@bot.tree.command(name="listchannels", description="Show all channels with translation settings")
+async def list_channels(interaction: discord.Interaction):
+    data = load_data()
+    channels = data.get("channels", {})
+    reverse_channels = set(data.get("reverse_channels", []))
+
+    if not channels and not reverse_channels:
+        await interaction.response.send_message("📭 No channels are configured for translation.", ephemeral=True)
+        return
+
+    lines = []
+    for ch_id, langs in channels.items():
+        rev = " (Reverse)" if ch_id in reverse_channels else ""
+        lines.append(f"<#{ch_id}>: {langs[0]} ↔ {langs[1]}{rev}")
+
+    for ch_id in reverse_channels:
+        if ch_id not in channels:
+            lines.append(f"<#{ch_id}>: Reverse only")
+
+    await interaction.response.send_message("🌐 Translation channels:\n" + "\n".join(lines), ephemeral=True)
 
 # -------------------------
 # Number tracking commands
