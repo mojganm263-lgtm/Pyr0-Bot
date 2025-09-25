@@ -1,3 +1,6 @@
-py-cord==2.5.0
-huggingface-hub==0.15.1
-matplotlib==3.9.2
+discord.py==2.3.3
+aiohttp==3.8.5
+matplotlib==3.8.1
+transformers==4.44.0
+torch==2.2.0
+aiohttp_jinja2==1.5
