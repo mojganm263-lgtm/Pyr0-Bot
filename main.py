@@ -2,8 +2,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import json
-import matplotlib.pyplot as plt
-import io
 import threading
 from flask import Flask
 import requests
@@ -19,9 +17,10 @@ def home():
     return "OK"
 
 def run_flask():
+    # Flask runs in a separate thread to keep the bot alive on Render
     app.run(host="0.0.0.0", port=8080)
 
-threading.Thread(target=run_flask).start()
+threading.Thread(target=run_flask, daemon=True).start()
 
 # -------------------------
 # Bot setup
@@ -29,7 +28,7 @@ threading.Thread(target=run_flask).start()
 intents = discord.Intents.default()
 intents.messages = True
 intents.reactions = True
-intents.message_content = True  # <-- Required for reading message content
+intents.message_content = True  # required to read messages
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 bot.remove_command("help")  # remove default help command
@@ -51,8 +50,7 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def translate_text(text, target_lang):
-    # Example using Hugging Face Inference API
-    HF_API = os.environ.get("HF_KEY")  # <-- Put your Hugging Face key in Render env
+    HF_API = os.environ.get("HF_KEY")
     model = "Helsinki-NLP/opus-mt-en-ROMANCE"
     headers = {"Authorization": f"Bearer {HF_API}"}
     payload = {"inputs": text}
@@ -67,8 +65,10 @@ def translate_text(text, target_lang):
 # -------------------------
 @bot.event
 async def on_ready():
+    # Sync slash commands
     await bot.tree.sync()
-    print(f"Logged in as {bot.user}")
+    print(f"Logged in as {bot.user} ({bot.user.id})")
+    print(f"Connected guilds: {[g.name for g in bot.guilds]}")
 
 # -------------------------
 # Slash commands
@@ -143,5 +143,8 @@ async def on_reaction_add(reaction, user):
 # -------------------------
 # Run bot
 # -------------------------
-TOKEN = os.environ.get("TOKEN")
-bot.run(TOKEN)
+TOKEN = os.environ.get("TOKEN")  # Render environment variable
+if not TOKEN:
+    print("ERROR: TOKEN environment variable is missing!")
+else:
+    bot.run(TOKEN)
