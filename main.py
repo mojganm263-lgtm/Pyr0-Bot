@@ -1,55 +1,42 @@
-import os
 import discord
 from discord.ext import commands
+from discord.utils import get
 import json
-import datetime
-import io
 import matplotlib.pyplot as plt
-from huggingface_hub import InferenceClient  # Your original translator
-
-# ---------------- Hugging Face Translator ---------------- #
-HF_KEY = os.getenv("HF_KEY")
-translator_client = InferenceClient(HF_KEY)
-
-def translate(text, target_lang):
-    """Translate using your Hugging Face model."""
-    model_id = "Helsinki-NLP/opus-mt-en-uk"
-    if target_lang == "ko":
-        model_id = "Helsinki-NLP/opus-mt-en-ko"
-    elif target_lang == "en":
-        model_id = "Helsinki-NLP/opus-mt-ko-en"
-    elif target_lang == "uk":
-        model_id = "Helsinki-NLP/opus-mt-en-uk"
-    
-    result = translator_client.text(text, model=model_id)
-    return result["translation_text"] if "translation_text" in result else str(result)
-
-# ---------------- JSON Storage ---------------- #
-DATA_FILE = "data.json"
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
-        json.dump({"channels": [], "numbers": {}}, f)
-
-def load_data():
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-data = load_data()
+from datetime import datetime
+import os
+import io
 
 # ---------------- Bot Setup ---------------- #
 intents = discord.Intents.default()
-intents.messages = True
 intents.message_content = True
 intents.reactions = True
+
 bot = commands.Bot(command_prefix="/", intents=intents)
 
+DATA_FILE = "data.json"
+
+# Load or initialize data
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "r") as f:
+        data = json.load(f)
+else:
+    data = {
+        "channels": [],  # List of channel IDs
+        "numbers": {}    # { "name": [{"value": number, "timestamp": timestamp}, ...] }
+    }
+
+# ---------------- Utility ---------------- #
+def save_data():
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+def ensure_channel(ctx):
+    return ctx.channel.id in data["channels"]
+
 # ---------------- Commands ---------------- #
-@bot.command()
-async def help(ctx):
+@bot.command(name="commands")
+async def show_commands(ctx):
     help_text = """
 **Bot Commands**
 `/add <name> <number>` → Save a number under a name.
@@ -74,113 +61,128 @@ React with 🇺🇸 🇰🇷 🇺🇦 to translate a message into that language.
 async def setchannel(ctx):
     if ctx.channel.id not in data["channels"]:
         data["channels"].append(ctx.channel.id)
-        save_data(data)
-        await ctx.send(f"✅ {ctx.channel.name} set as translation/data channel.")
+        save_data()
+        await ctx.send(f"Channel {ctx.channel.name} is now set for translations.")
     else:
-        await ctx.send("⚠️ Channel already set.")
+        await ctx.send("This channel is already set.")
 
 @bot.command()
 async def listchannels(ctx):
     if not data["channels"]:
-        await ctx.send("⚠️ No channels set yet.")
+        await ctx.send("No channels have been set yet.")
         return
-    channels = [f"<#{cid}>" for cid in data["channels"]]
-    await ctx.send("📌 Set channels: " + ", ".join(channels))
+    msg = "Set channels:\n"
+    for ch_id in data["channels"]:
+        ch = bot.get_channel(ch_id)
+        msg += f"- {ch.name if ch else ch_id}\n"
+    await ctx.send(msg)
 
 @bot.command()
 async def add(ctx, name: str, number: float):
+    if not ensure_channel(ctx):
+        return
     if name not in data["numbers"]:
         data["numbers"][name] = []
-    data["numbers"][name].append({"value": number, "time": str(datetime.datetime.now())})
-    save_data(data)
-    await ctx.send(f"✅ Added {number} under **{name}**")
+    data["numbers"][name].append({
+        "value": number,
+        "timestamp": datetime.now().isoformat()
+    })
+    save_data()
+    await ctx.send(f"Added {number} for {name}.")
 
 @bot.command()
 async def view(ctx, name: str):
-    if name not in data["numbers"]:
-        await ctx.send("⚠️ No data for that name.")
+    if not ensure_channel(ctx):
         return
-    records = data["numbers"][name]
-    msg = "\n".join([f"{r['time']}: {r['value']}" for r in records])
-    await ctx.send(f"📊 Data for **{name}**:\n{msg}")
+    if name not in data["numbers"]:
+        await ctx.send(f"No data for {name}.")
+        return
+    msg = f"Data for {name}:\n"
+    for entry in data["numbers"][name]:
+        msg += f"{entry['timestamp']}: {entry['value']}\n"
+    await ctx.send(msg)
 
 @bot.command()
 async def viewall(ctx):
-    if not data["numbers"]:
-        await ctx.send("⚠️ No data stored.")
+    if not ensure_channel(ctx):
         return
-    for name, records in data["numbers"].items():
-        msg = "\n".join([f"{r['time']}: {r['value']}" for r in records])
-        await ctx.send(f"📊 **{name}**:\n{msg}")
+    if not data["numbers"]:
+        await ctx.send("No numbers stored.")
+        return
+    msg = ""
+    for name, entries in data["numbers"].items():
+        msg += f"**{name}**\n"
+        for entry in entries:
+            msg += f"{entry['timestamp']}: {entry['value']}\n"
+    await ctx.send(msg)
 
 @bot.command()
 async def delete(ctx, name: str):
+    if not ensure_channel(ctx):
+        return
     if name in data["numbers"]:
         del data["numbers"][name]
-        save_data(data)
-        await ctx.send(f"🗑️ Deleted all data for **{name}**")
+        save_data()
+        await ctx.send(f"Deleted all data for {name}.")
     else:
-        await ctx.send("⚠️ No data for that name.")
+        await ctx.send(f"No data for {name}.")
 
 @bot.command()
 async def graph(ctx, name: str):
-    if name not in data["numbers"] or not data["numbers"][name]:
-        await ctx.send("⚠️ No data for that name.")
+    if not ensure_channel(ctx):
         return
-    records = data["numbers"][name]
-    times = [r["time"] for r in records]
-    values = [r["value"] for r in records]
+    if name not in data["numbers"]:
+        await ctx.send(f"No data for {name}.")
+        return
+    values = [entry["value"] for entry in data["numbers"][name]]
+    times = [entry["timestamp"] for entry in data["numbers"][name]]
     plt.figure()
     plt.plot(times, values, marker="o")
-    plt.xticks(rotation=45, ha="right")
     plt.title(f"Graph for {name}")
+    plt.xlabel("Time")
+    plt.ylabel("Value")
+    plt.xticks(rotation=45)
     plt.tight_layout()
     buf = io.BytesIO()
     plt.savefig(buf, format="png")
     buf.seek(0)
-    await ctx.send(file=discord.File(buf, "graph.png"))
-    buf.close()
+    plt.close()
+    await ctx.send(file=discord.File(fp=buf, filename=f"{name}_graph.png"))
 
 @bot.command()
 async def table(ctx, name: str):
-    if name not in data["numbers"] or not data["numbers"][name]:
-        await ctx.send("⚠️ No data for that name.")
+    if not ensure_channel(ctx):
         return
-    records = data["numbers"][name]
-    msg = "```\nTime\t\t\tValue\n"
-    for r in records:
-        msg += f"{r['time']}\t{r['value']}\n"
-    msg += "```"
+    if name not in data["numbers"]:
+        await ctx.send(f"No data for {name}.")
+        return
+    msg = f"**Table for {name}**\n"
+    msg += "Time | Value\n"
+    msg += "--- | ---\n"
+    for entry in data["numbers"][name]:
+        msg += f"{entry['timestamp']} | {entry['value']}\n"
     await ctx.send(msg)
 
-@bot.command()
-async def translate(ctx, lang: str, *, text: str):
-    if lang.lower() not in ["en", "ko", "uk"]:
-        await ctx.send("⚠️ Supported languages: en, ko, uk")
-        return
-    result = translate(text, lang.lower())
-    await ctx.send(f"🌐 {lang.upper()} → {result}")
+# ---------------- Reactions for translation ---------------- #
+LANG_FLAGS = {
+    "🇺🇸": "en",
+    "🇰🇷": "ko",
+    "🇺🇦": "uk"
+}
 
-# ---------------- Reaction Translator ---------------- #
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
     if reaction.message.channel.id not in data["channels"]:
         return
+    lang = LANG_FLAGS.get(str(reaction.emoji))
+    if not lang:
+        return
+    # Simple translator placeholder; replace with your Hugging Face API call
+    translated = f"[{lang} translation of]: {reaction.message.content}"
+    await reaction.message.reply(translated)
 
-    lang_map = {
-        "🇺🇸": "en",
-        "🇰🇷": "ko",
-        "🇺🇦": "uk"
-    }
-
-    if reaction.emoji in lang_map:
-        try:
-            result = translate(reaction.message.content, lang_map[reaction.emoji])
-            await reaction.message.channel.send(f"{reaction.emoji} → {result}")
-        except Exception:
-            await reaction.message.channel.send("⚠️ Translation error.")
-
-# ---------------- Run Bot ---------------- #
-bot.run(os.getenv("DISCORD_TOKEN"))
+# ---------------- Start Bot ---------------- #
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # Set this in Render env variables
+bot.run(DISCORD_TOKEN)
