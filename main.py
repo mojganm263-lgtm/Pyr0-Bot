@@ -6,6 +6,7 @@ import threading
 from flask import Flask
 import requests
 import os
+import matplotlib.pyplot as plt
 
 # -------------------------
 # Minimal Flask server for Render
@@ -28,10 +29,21 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)  # ! only for dev, slash commands are main
 bot.remove_command("help")
 
 DATA_FILE = "data.json"
+
+# -------------------------
+# Language mapping
+# -------------------------
+LANG_MAP = {
+    "en": "english",
+    "uk": "ukrainian",
+    "ko": "korean",
+    "pt": "portuguese"
+}
+REVERSE_LANG_MAP = {v: k for k, v in LANG_MAP.items()}
 
 # -------------------------
 # Helper functions
@@ -48,36 +60,26 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def detect_language(text: str):
-    """Detect the language of a given text using Hugging Face."""
     HF_API = os.environ.get("HF_KEY")
     headers = {"Authorization": f"Bearer {HF_API}"}
     payload = {"inputs": text}
     model = "papluca/xlm-roberta-base-language-detection"
-    response = requests.post(
-        f"https://api-inference.huggingface.co/models/{model}",
-        headers=headers,
-        json=payload,
-    )
+    response = requests.post(f"https://api-inference.huggingface.co/models/{model}", headers=headers, json=payload)
     try:
         result = response.json()
         if isinstance(result, list) and result:
             best = max(result[0], key=lambda x: x["score"])
-            return best["label"]
+            return best["label"].lower()
     except Exception:
         return None
     return None
 
 def translate_text(text: str, source: str, target: str):
-    """Translate from source to target language using Hugging Face."""
     HF_API = os.environ.get("HF_KEY")
     headers = {"Authorization": f"Bearer {HF_API}"}
     payload = {"inputs": text}
     model = f"Helsinki-NLP/opus-mt-{source}-{target}"
-    response = requests.post(
-        f"https://api-inference.huggingface.co/models/{model}",
-        headers=headers,
-        json=payload,
-    )
+    response = requests.post(f"https://api-inference.huggingface.co/models/{model}", headers=headers, json=payload)
     try:
         result = response.json()
         if isinstance(result, list) and "translation_text" in result[0]:
@@ -92,8 +94,7 @@ def translate_text(text: str, source: str, target: str):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"Logged in as {bot.user} ({bot.user.id})")
-    print(f"Connected guilds: {[g.name for g in bot.guilds]}")
+    print(f"✅ Logged in as {bot.user} ({bot.user.id})")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -104,16 +105,22 @@ async def on_message(message: discord.Message):
     config = data["channels"].get(str(message.channel.id))
 
     if config:
-        source = config.get("source")
-        target = config.get("target")
+        source = config.get("source")  # e.g. "uk"
+        target = config.get("target")  # e.g. "en"
         detected = detect_language(message.content)
 
-        if detected == source:
+        if not detected:
+            return
+
+        # Map detection result to code
+        detected_code = REVERSE_LANG_MAP.get(detected)
+
+        if detected_code == source:
             translated = translate_text(message.content, source, target)
-            await message.channel.send(f"🌐 {message.author.display_name} ({target}): {translated}")
-        elif detected == target:
+            await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
+        elif detected_code == target:
             translated = translate_text(message.content, target, source)
-            await message.channel.send(f"🌐 {message.author.display_name} ({source}): {translated}")
+            await message.reply(f"🌐 {message.author.display_name} ({source}): {translated}")
 
     await bot.process_commands(message)
 
@@ -121,64 +128,82 @@ async def on_message(message: discord.Message):
 # Slash commands
 # -------------------------
 @bot.tree.command(name="setchannel", description="Set translation pair for this channel")
-@app_commands.describe(source="Source language code", target="Target language code")
-async def set_channel(interaction: discord.Interaction, source: str, target: str):
-    data = load_data()
-    data["channels"][str(interaction.channel.id)] = {"source": source, "target": target}
-    save_data(data)
-    await interaction.response.send_message(
-        f"Channel set for translations: {source} ↔ {target}", ephemeral=True
-    )
-
-@bot.tree.command(name="commands", description="Show bot commands")
-async def commands_list(interaction: discord.Interaction):
-    cmds = [
-        "/setchannel [source] [target] - set translation pair for channel",
-        "/commands - show commands",
-        "/addentry [name] [number] - add a number to a name",
-        "/showtable [name/all] - display numbers table",
-        "/removeentry [name] - remove entries for a name",
+@app_commands.choices(
+    source=[
+        app_commands.Choice(name="English", value="en"),
+        app_commands.Choice(name="Korean", value="ko"),
+        app_commands.Choice(name="Ukrainian", value="uk"),
+        app_commands.Choice(name="Portuguese", value="pt"),
+    ],
+    target=[
+        app_commands.Choice(name="English", value="en"),
+        app_commands.Choice(name="Korean", value="ko"),
+        app_commands.Choice(name="Ukrainian", value="uk"),
+        app_commands.Choice(name="Portuguese", value="pt"),
     ]
-    await interaction.response.send_message("\n".join(cmds), ephemeral=True)
+)
+async def set_channel(interaction: discord.Interaction, source: app_commands.Choice[str], target: app_commands.Choice[str]):
+    data = load_data()
+    data["channels"][str(interaction.channel.id)] = {"source": source.value, "target": target.value}
+    save_data(data)
+    await interaction.response.send_message(f"✅ Channel set: {source.name} ↔ {target.name}", ephemeral=True)
 
-# -------------------------
-# Prefix commands (unchanged)
-# -------------------------
-@bot.command()
-async def addentry(ctx, name: str, number: float):
+@bot.tree.command(name="addentry", description="Add a number to a name")
+async def addentry(interaction: discord.Interaction, name: str, number: float):
     data = load_data()
     entries = data.get("entries", {})
-    entries.setdefault(name, []).append(
-        {"value": number, "timestamp": ctx.message.created_at.isoformat()}
-    )
+    entries.setdefault(name, []).append({"value": number, "timestamp": interaction.created_at.isoformat()})
     data["entries"] = entries
     save_data(data)
-    await ctx.send(f"Added {number} to {name}")
+    await interaction.response.send_message(f"Added {number} to {name}")
 
-@bot.command()
-async def showtable(ctx, name: str):
+@bot.tree.command(name="showtable", description="Show table of numbers")
+async def showtable(interaction: discord.Interaction, name: str):
     data = load_data()
     entries = data.get("entries", {})
     if name == "all":
-        text = ""
-        for n, vals in entries.items():
-            text += f"{n}: {[v['value'] for v in vals]}\n"
-        await ctx.send(f"```\n{text}\n```")
+        text = "\n".join([f"{n}: {[v['value'] for v in vals]}" for n, vals in entries.items()])
+        await interaction.response.send_message(f"```\n{text}\n```")
     else:
         vals = entries.get(name, [])
-        await ctx.send(f"{name}: {[v['value'] for v in vals]}")
+        await interaction.response.send_message(f"{name}: {[v['value'] for v in vals]}")
 
-@bot.command()
-async def removeentry(ctx, name: str):
+@bot.tree.command(name="showgraph", description="Show graph of numbers")
+async def showgraph(interaction: discord.Interaction, name: str):
+    data = load_data()
+    entries = data.get("entries", {})
+    vals = []
+    if name == "all":
+        for n, v in entries.items():
+            vals.extend([x["value"] for x in v])
+    else:
+        vals = [x["value"] for x in entries.get(name, [])]
+
+    if not vals:
+        await interaction.response.send_message("No data to graph.")
+        return
+
+    plt.figure()
+    plt.plot(vals, marker="o")
+    plt.title(f"Values for {name}")
+    plt.xlabel("Entry")
+    plt.ylabel("Value")
+    plt.savefig("graph.png")
+    plt.close()
+
+    await interaction.response.send_message(file=discord.File("graph.png"))
+
+@bot.tree.command(name="removeentry", description="Remove all entries for a name")
+async def removeentry(interaction: discord.Interaction, name: str):
     data = load_data()
     entries = data.get("entries", {})
     if name in entries:
         del entries[name]
         data["entries"] = entries
         save_data(data)
-        await ctx.send(f"Removed all entries for {name}")
+        await interaction.response.send_message(f"Removed all entries for {name}")
     else:
-        await ctx.send(f"No entries found for {name}")
+        await interaction.response.send_message(f"No entries found for {name}")
 
 # -------------------------
 # Run bot
