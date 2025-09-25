@@ -1,6 +1,4 @@
-discord.py==2.3.2
-aiohttp==3.8.5
+discord.py==2.3.0
 matplotlib==3.8.1
-transformers==4.44.0
-torch==2.2.0
-aiohttp_jinja2==1.5
+requests==2.32.0
+flask==2.3.4
