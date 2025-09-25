@@ -1,177 +1,189 @@
+import os
 import discord
 from discord.ext import commands
 import json
 import datetime
+import io
 import matplotlib.pyplot as plt
-from io import BytesIO
+from huggingface_hub import InferenceClient  # Your original translator
 
-# ----- Config -----
-TOKEN = "YOUR_DISCORD_BOT_TOKEN"  # set as environment variable for security
-bot = commands.Bot(command_prefix="/", intents=discord.Intents.all())
+# ---------------- Hugging Face Translator ---------------- #
+HF_KEY = os.getenv("HF_KEY")
+translator_client = InferenceClient(HF_KEY)
 
-# JSON storage
+def translate(text, target_lang):
+    """Translate using your Hugging Face model."""
+    # Replace with the model you used before
+    model_id = "Helsinki-NLP/opus-mt-en-uk"  # Example, adapt for en↔uk & en↔ko
+    if target_lang == "ko":
+        model_id = "Helsinki-NLP/opus-mt-en-ko"
+    elif target_lang == "en":
+        model_id = "Helsinki-NLP/opus-mt-ko-en"  # adjust based on your setup
+    elif target_lang == "uk":
+        model_id = "Helsinki-NLP/opus-mt-en-uk"
+    
+    result = translator_client.text(text, model=model_id)
+    return result["translation_text"] if "translation_text" in result else str(result)
+
+# ---------------- JSON Storage ---------------- #
 DATA_FILE = "data.json"
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({"channels": [], "numbers": {}}, f)
 
-# Load or initialize data
-try:
+def load_data():
     with open(DATA_FILE, "r") as f:
-        data = json.load(f)
-except FileNotFoundError:
-    data = {
-        "translation_channels": {},  # channel_id: lang_pair
-        "numeric_data": {}  # name: [{timestamp: value}, ...]
-    }
+        return json.load(f)
 
-# ----- Helper functions -----
-def save_data():
+def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def translate(text, target_lang):
-    # Replace with your actual translation model
-    # Example placeholder
-    return f"[{target_lang} translation of]: {text}"
+data = load_data()
 
-# ----- Commands -----
-@bot.command(name="help")
-async def help_command(ctx):
+# ---------------- Bot Setup ---------------- #
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+intents.reactions = True
+bot = commands.Bot(command_prefix="/", intents=intents)
+
+# ---------------- Commands ---------------- #
+
+@bot.command()
+async def help(ctx):
     help_text = """
-**Pyr0-Bot Commands**
+**Bot Commands**
+`/add <name> <number>` → Save a number under a name.
+`/view <name>` → Show all saved numbers for a name.
+`/viewall` → Show numbers for all names.
+`/delete <name>` → Delete all data for a name.
+`/graph <name>` → Generate a graph for a name.
+`/table <name>` → Generate a table for a name.
+`/setchannel` → Set current channel for bot use.
+`/listchannels` → Show all set channels.
+`/translate <lang> <text>` → Translate text. Supported: **en, ko, uk**
 
-/setchannel [channel] [lang_pair]
-> Example: /setchannel #translations en-uk
-Sets a channel for automatic translations between English and Ukrainian or Korean.
-
-/adddata [name] [value]
-> Example: /adddata Alice 42
-Adds numeric data to a name (timestamped).
-
-/deletedata [name]
-> Example: /deletedata Bob
-Deletes all data for the specified name.
-
-/compile [start_date] [end_date] [name/all]
-> Example: /compile 2025-09-01 2025-09-25 all
-Compiles data for the given period, either for one name or for all names.
-
-/graph [name/all]
-> Example: /graph Alice
-Generates a visual graph of numeric data for a name or all names.
-
-/table [name/all]
-> Example: /table all
-Generates a table of numeric data for a name or all names.
-
-**Translation Reaction Feature**
-React to any message in a set channel with:
-🇺🇦 → English ↔ Ukrainian translation
-🇰🇷 → English ↔ Korean translation
-The bot will post the translation immediately below the message.
+**Examples**
+`/translate en 안녕하세요`
+`/translate ko Hello`
+`/translate uk How are you?`
+React with 🇺🇸 🇰🇷 🇺🇦 to translate a message into that language.
 """
     await ctx.send(help_text)
 
-@bot.command(name="setchannel")
-async def set_channel(ctx, channel: discord.TextChannel, lang_pair: str):
-    data["translation_channels"][str(channel.id)] = lang_pair.lower()
-    save_data()
-    await ctx.send(f"Set {channel.mention} to translate {lang_pair}")
-
-@bot.command(name="adddata")
-async def add_data(ctx, name: str, value: float):
-    entry = {"timestamp": str(datetime.datetime.utcnow()), "value": value}
-    if name not in data["numeric_data"]:
-        data["numeric_data"][name] = []
-    data["numeric_data"][name].append(entry)
-    save_data()
-    await ctx.send(f"Added {value} to {name}")
-
-@bot.command(name="deletedata")
-async def delete_data(ctx, name: str):
-    if name in data["numeric_data"]:
-        del data["numeric_data"][name]
-        save_data()
-        await ctx.send(f"Deleted all data for {name}")
+@bot.command()
+async def setchannel(ctx):
+    if ctx.channel.id not in data["channels"]:
+        data["channels"].append(ctx.channel.id)
+        save_data(data)
+        await ctx.send(f"✅ {ctx.channel.name} set as translation/data channel.")
     else:
-        await ctx.send(f"No data found for {name}")
+        await ctx.send("⚠️ Channel already set.")
 
-@bot.command(name="compile")
-async def compile_data(ctx, start_date: str, end_date: str, target: str):
-    try:
-        start = datetime.datetime.fromisoformat(start_date)
-        end = datetime.datetime.fromisoformat(end_date)
-    except ValueError:
-        await ctx.send("Date format must be YYYY-MM-DD")
+@bot.command()
+async def listchannels(ctx):
+    if not data["channels"]:
+        await ctx.send("⚠️ No channels set yet.")
         return
+    channels = [f"<#{cid}>" for cid in data["channels"]]
+    await ctx.send("📌 Set channels: " + ", ".join(channels))
 
-    results = {}
-    names = data["numeric_data"].keys() if target.lower() == "all" else [target]
-    for name in names:
-        results[name] = [
-            entry["value"] for entry in data["numeric_data"].get(name, [])
-            if start <= datetime.datetime.fromisoformat(entry["timestamp"]) <= end
-        ]
-    await ctx.send(f"Compiled data: {results}")
+@bot.command()
+async def add(ctx, name: str, number: float):
+    if name not in data["numbers"]:
+        data["numbers"][name] = []
+    data["numbers"][name].append({"value": number, "time": str(datetime.datetime.now())})
+    save_data(data)
+    await ctx.send(f"✅ Added {number} under **{name}**")
 
-@bot.command(name="table")
-async def table_data(ctx, target: str):
-    names = data["numeric_data"].keys() if target.lower() == "all" else [target]
-    table_text = ""
-    for name in names:
-        entries = data["numeric_data"].get(name, [])
-        table_text += f"**{name}:**\n"
-        for e in entries:
-            table_text += f"{e['timestamp']}: {e['value']}\n"
-    await ctx.send(table_text or "No data available.")
+@bot.command()
+async def view(ctx, name: str):
+    if name not in data["numbers"]:
+        await ctx.send("⚠️ No data for that name.")
+        return
+    records = data["numbers"][name]
+    msg = "\n".join([f"{r['time']}: {r['value']}" for r in records])
+    await ctx.send(f"📊 Data for **{name}**:\n{msg}")
 
-@bot.command(name="graph")
-async def graph_data(ctx, target: str):
-    names = data["numeric_data"].keys() if target.lower() == "all" else [target]
-    plt.figure(figsize=(6,4))
-    for name in names:
-        entries = data["numeric_data"].get(name, [])
-        if entries:
-            timestamps = [datetime.datetime.fromisoformat(e["timestamp"]) for e in entries]
-            values = [e["value"] for e in entries]
-            plt.plot(timestamps, values, label=name)
-    plt.legend()
+@bot.command()
+async def viewall(ctx):
+    if not data["numbers"]:
+        await ctx.send("⚠️ No data stored.")
+        return
+    for name, records in data["numbers"].items():
+        msg = "\n".join([f"{r['time']}: {r['value']}" for r in records])
+        await ctx.send(f"📊 **{name}**:\n{msg}")
+
+@bot.command()
+async def delete(ctx, name: str):
+    if name in data["numbers"]:
+        del data["numbers"][name]
+        save_data(data)
+        await ctx.send(f"🗑️ Deleted all data for **{name}**")
+    else:
+        await ctx.send("⚠️ No data for that name.")
+
+@bot.command()
+async def graph(ctx, name: str):
+    if name not in data["numbers"] or not data["numbers"][name]:
+        await ctx.send("⚠️ No data for that name.")
+        return
+    records = data["numbers"][name]
+    times = [r["time"] for r in records]
+    values = [r["value"] for r in records]
+    plt.figure()
+    plt.plot(times, values, marker="o")
+    plt.xticks(rotation=45, ha="right")
+    plt.title(f"Graph for {name}")
     plt.tight_layout()
-    buf = BytesIO()
+    buf = io.BytesIO()
     plt.savefig(buf, format="png")
     buf.seek(0)
-    await ctx.send(file=discord.File(fp=buf, filename="graph.png"))
-    plt.close()
+    await ctx.send(file=discord.File(buf, "graph.png"))
+    buf.close()
 
-# ----- Event listeners -----
-@bot.event
-async def on_message(message):
-    # Ignore bot messages
-    if message.author.bot:
+@bot.command()
+async def table(ctx, name: str):
+    if name not in data["numbers"] or not data["numbers"][name]:
+        await ctx.send("⚠️ No data for that name.")
         return
+    records = data["numbers"][name]
+    msg = "```\nTime\t\t\tValue\n"
+    for r in records:
+        msg += f"{r['time']}\t{r['value']}\n"
+    msg += "```"
+    await ctx.send(msg)
 
-    # Check translation channels
-    lang_pair = data["translation_channels"].get(str(message.channel.id))
-    if lang_pair:
-        src, tgt = lang_pair.split("-")
-        translated = translate(message.content, tgt)
-        await message.channel.send(translated)
+@bot.command()
+async def translate(ctx, lang: str, *, text: str):
+    if lang.lower() not in ["en", "ko", "uk"]:
+        await ctx.send("⚠️ Supported languages: en, ko, uk")
+        return
+    result = translate(text, lang.lower())
+    await ctx.send(f"🌐 {lang.upper()} → {result}")
 
-    await bot.process_commands(message)
+# ---------------- Reaction Translator ---------------- #
 
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
-    message = reaction.message
-    lang_pair = data["translation_channels"].get(str(message.channel.id))
-    if not lang_pair:
+    if reaction.message.channel.id not in data["channels"]:
         return
 
-    if str(reaction.emoji) == "🇺🇦":
-        translated = translate(message.content, "uk")
-        await message.channel.send(translated)
-    elif str(reaction.emoji) == "🇰🇷":
-        translated = translate(message.content, "ko")
-        await message.channel.send(translated)
+    lang_map = {
+        "🇺🇸": "en",
+        "🇰🇷": "ko",
+        "🇺🇦": "uk"
+    }
 
-# ----- Run bot -----
-bot.run(TOKEN)
+    if reaction.emoji in lang_map:
+        try:
+            result = translate(reaction.message.content, lang_map[reaction.emoji])
+            await reaction.message.channel.send(f"{reaction.emoji} → {result}")
+        except Exception:
+            await reaction.message.channel.send("⚠️ Translation error.")
+
+# ---------------- Run Bot ---------------- #
+bot.run(os.getenv("DISCORD_TOKEN"))
