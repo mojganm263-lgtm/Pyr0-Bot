@@ -47,7 +47,7 @@ def load_data():
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        return {"channels": {}, "entries": {}}
+        return {"channels": {}, "reverse_channels": [], "entries": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -76,8 +76,8 @@ def detect_language(text: str):
             best = max(result[0], key=lambda x: x["score"])
             detected = best["label"].lower().strip()
             print(f"🔎 Detected language: {detected}")
-            # convert detected language to standard code
-            code_map = {"english": "en", "ukrainian": "uk", "korean": "ko", "portuguese": "pt"}
+            code_map = {"english": "en", "ukrainian": "uk", "korean": "ko", "portuguese": "pt",
+                        "en": "en", "uk": "uk", "ko": "ko", "pt": "pt"}
             return code_map.get(detected)
     except Exception as e:
         print(f"⚠️ Language detection error: {e}")
@@ -125,7 +125,9 @@ async def on_message(message: discord.Message):
 
     data = load_data()
     langs = data["channels"].get(str(message.channel.id))
-    if not langs or len(langs) != 2:
+    reverse_channels = data.get("reverse_channels", [])
+
+    if not langs and str(message.channel.id) not in reverse_channels:
         return
 
     detected_code = detect_language(message.content)
@@ -137,10 +139,19 @@ async def on_message(message: discord.Message):
         print(f"⚠️ Detected language '{detected_code}' not supported")
         return
 
-    if detected_code in langs:
+    # Standard two-way translation
+    if langs and detected_code in langs:
         target = langs[1] if detected_code == langs[0] else langs[0]
         translated = translate_text(message.content, detected_code, target)
         await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
+
+    # Reverse translation (translate all messages to a fixed language)
+    if str(message.channel.id) in reverse_channels:
+        # pick the first language in pair as target, or default to English
+        target = langs[0] if langs else "en"
+        if detected_code != target:
+            translated = translate_text(message.content, detected_code, target)
+            await message.reply(f"🔄 Reverse ({target}): {translated}")
 
     await bot.process_commands(message)
 
@@ -165,8 +176,38 @@ async def set_channel(interaction: discord.Interaction, lang1: app_commands.Choi
     data = load_data()
     data["channels"][str(interaction.channel.id)] = [lang1.value, lang2.value]
     save_data(data)
-    print(f"✅ Channel {interaction.channel.id} set: {lang1.value} ↔ {lang2.value}")
     await interaction.response.send_message(f"✅ Translation pair set: {lang1.name} ↔ {lang2.name}", ephemeral=True)
+
+@bot.tree.command(name="setreverse", description="Enable reverse translation for this channel")
+async def set_reverse(interaction: discord.Interaction):
+    data = load_data()
+    reverse_channels = set(data.get("reverse_channels", []))
+    reverse_channels.add(str(interaction.channel.id))
+    data["reverse_channels"] = list(reverse_channels)
+    save_data(data)
+    await interaction.response.send_message("🔄 Reverse translation enabled for this channel.", ephemeral=True)
+
+@bot.tree.command(name="removereverse", description="Disable reverse translation for this channel")
+async def remove_reverse(interaction: discord.Interaction):
+    data = load_data()
+    reverse_channels = set(data.get("reverse_channels", []))
+    reverse_channels.discard(str(interaction.channel.id))
+    data["reverse_channels"] = list(reverse_channels)
+    save_data(data)
+    await interaction.response.send_message("🔄 Reverse translation disabled for this channel.", ephemeral=True)
+
+@bot.tree.command(name="help", description="Show all commands")
+async def help_cmd(interaction: discord.Interaction):
+    commands_list = [
+        "/setchannel [lang1] [lang2] - set translation pair",
+        "/setreverse - enable reverse translation",
+        "/removereverse - disable reverse translation",
+        "/addentry [name] [number] - add number entry",
+        "/showtable [name/all] - show entries",
+        "/showgraph [name/all] - show graph",
+        "/removeentry [name] - remove entries"
+    ]
+    await interaction.response.send_message("📜 Commands:\n" + "\n".join(commands_list), ephemeral=True)
 
 # -------------------------
 # Number tracking commands
@@ -213,7 +254,6 @@ async def showgraph(interaction: discord.Interaction, name: str):
     plt.ylabel("Value")
     plt.savefig("graph.png")
     plt.close()
-
     await interaction.response.send_message(file=discord.File("graph.png"))
 
 @bot.tree.command(name="removeentry", description="Remove all entries for a name")
