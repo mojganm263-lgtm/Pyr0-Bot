@@ -107,14 +107,14 @@ def translate_text(text: str, source: str, target: str):
             print(f"⚠️ Translation error ({src}->{tgt}): {e}")
         return None
 
-    # Try direct translation first
+    # 1️⃣ Try direct translation
     translated = hf_translate(source, target, text)
     if translated:
         print(f"🌐 Translation ({source}->{target}): {translated}")
         return translated
 
-    # Fallback via English if needed
-    if source != "en" and target != "en":
+    # 2️⃣ Try translation via English as intermediate
+    if source != "en":
         intermediate = hf_translate(source, "en", text)
         if intermediate:
             translated = hf_translate("en", target, intermediate)
@@ -140,7 +140,6 @@ async def on_message(message: discord.Message):
 
     data = load_data()
     langs = data["channels"].get(str(message.channel.id))
-
     if not langs:
         return
 
@@ -201,15 +200,10 @@ async def help_cmd(interaction: discord.Interaction):
 async def list_channels(interaction: discord.Interaction):
     data = load_data()
     channels = data.get("channels", {})
-
     if not channels:
         await interaction.response.send_message("📭 No channels are configured for translation.", ephemeral=True)
         return
-
-    lines = []
-    for ch_id, langs in channels.items():
-        lines.append(f"<#{ch_id}>: {langs[0]} ↔ {langs[1]}")
-
+    lines = [f"<#{ch_id}>: {langs[0]} ↔ {langs[1]}" for ch_id, langs in channels.items()]
     await interaction.response.send_message("🌐 Translation channels:\n" + "\n".join(lines), ephemeral=True)
 
 # -------------------------
@@ -245,11 +239,9 @@ async def showgraph(interaction: discord.Interaction, name: str):
             vals.extend([x["value"] for x in v])
     else:
         vals = [x["value"] for x in entries.get(name, [])]
-
     if not vals:
         await interaction.response.send_message("No data to graph.")
         return
-
     plt.figure()
     plt.plot(vals, marker="o")
     plt.title(f"Values for {name}")
