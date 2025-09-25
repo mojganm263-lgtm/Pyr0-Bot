@@ -1,17 +1,5 @@
-# -------------------
-# Fix for Python 3.13 Render (skip voice/audio)
-# -------------------
-import sys
-sys.modules['discord.opus'] = None
-sys.modules['discord.player'] = None
-sys.modules['discord.voice_client'] = None
-
-# -------------------
-# Imports
-# -------------------
 import discord
 from discord.ext import commands
-from discord.commands import option  # py-cord slash commands
 import json
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -19,6 +7,7 @@ from io import BytesIO
 from threading import Thread
 from flask import Flask
 import os
+from transformers import pipeline
 
 # -------------------
 # Flask server for Render keep-alive
@@ -39,6 +28,7 @@ Thread(target=run_flask).start()
 # -------------------
 intents = discord.Intents.default()
 intents.message_content = True
+intents.reactions = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # -------------------
@@ -59,81 +49,108 @@ def save_data():
 # Translation helper
 # -------------------
 def translate_message(text, pair):
-    from transformers import pipeline
     if pair == "en-uk":
         if any("\u0400" <= c <= "\u04FF" for c in text):
-            model = "Helsinki-NLP/opus-mt-uk-en"
+            model_name = "Helsinki-NLP/opus-mt-uk-en"
         else:
-            model = "Helsinki-NLP/opus-mt-en-uk"
+            model_name = "Helsinki-NLP/opus-mt-en-uk"
     elif pair == "en-ko":
         if any("\uAC00" <= c <= "\uD7AF" for c in text):
-            model = "Helsinki-NLP/opus-mt-ko-en"
+            model_name = "Helsinki-NLP/opus-mt-ko-en"
         else:
-            model = "Helsinki-NLP/opus-mt-en-ko"
-    translator = pipeline("translation", model=model, device=-1)
+            model_name = "Helsinki-NLP/opus-mt-en-ko"
+    translator = pipeline("translation", model=model_name, device=-1)
     return translator(text, max_length=512)[0]['translation_text']
 
 # -------------------
-# Slash commands
+# Commands
 # -------------------
-@bot.slash_command(name="setchannel", description="Set a translation channel")
-@option("channel", discord.TextChannel, description="Select the channel")
-@option("language_pair", str, description="Choose language pair (en-uk or en-ko)")
-async def setchannel(ctx, channel, language_pair):
+@bot.command(name="setchannel")
+async def setchannel(ctx, channel: discord.TextChannel, language_pair: str):
     if language_pair not in ["en-uk", "en-ko"]:
-        await ctx.respond("Invalid language pair! Use 'en-uk' or 'en-ko'.")
+        await ctx.send("Invalid language pair! Use 'en-uk' or 'en-ko'.")
         return
     data["translate_channels"][str(channel.id)] = language_pair
     save_data()
-    await ctx.respond(f"Channel {channel.mention} set to {language_pair} translation.")
+    await ctx.send(f"Channel {channel.mention} set to {language_pair} translation.")
 
-@bot.slash_command(name="log", description="Log a number with a name")
-@option("name", str, description="Name/label for the entry")
-@option("value", int, description="Number to log")
-async def log(ctx, name, value):
+@bot.command(name="resetchannel")
+async def resetchannel(ctx, channel: discord.TextChannel):
+    removed = data["translate_channels"].pop(str(channel.id), None)
+    save_data()
+    if removed:
+        await ctx.send(f"Removed {channel.mention} from translation channels.")
+    else:
+        await ctx.send(f"{channel.mention} was not a translation channel.")
+
+@bot.command(name="channels")
+async def channels(ctx):
+    if not data["translate_channels"]:
+        await ctx.send("No channels are set for translation.")
+        return
+    msg = "Translation channels:\n"
+    for cid, pair in data["translate_channels"].items():
+        ch = ctx.guild.get_channel(int(cid))
+        if ch:
+            msg += f"{ch.mention}: {pair}\n"
+    await ctx.send(msg)
+
+@bot.command(name="log")
+async def log(ctx, name: str, value: int):
     entry = {"name": name, "value": value, "timestamp": datetime.utcnow().isoformat()}
     data["entries"].append(entry)
     save_data()
-    await ctx.respond(f"Logged {value} for {name} at {entry['timestamp']}.")
+    await ctx.send(f"Logged {value} for {name} at {entry['timestamp']}.")
 
-@bot.slash_command(name="report", description="Show report for a name or all names")
-@option("start", str, description="Start timestamp YYYY-MM-DDTHH:MM")
-@option("end", str, description="End timestamp YYYY-MM-DDTHH:MM")
-@option("name", str, description="Name to filter or 'all' for all names")
-async def report(ctx, start, end, name):
+@bot.command(name="delete")
+async def delete(ctx, name: str):
+    global data
+    if name.lower() == "all":
+        data["entries"] = []
+        save_data()
+        await ctx.send("All entries deleted.")
+        return
+    before = len(data["entries"])
+    data["entries"] = [e for e in data["entries"] if e["name"].lower() != name.lower()]
+    save_data()
+    deleted_count = before - len(data["entries"])
+    if deleted_count == 0:
+        await ctx.send(f"No entries found for '{name}'.")
+    else:
+        await ctx.send(f"Deleted {deleted_count} entries for '{name}'.")
+
+@bot.command(name="report")
+async def report(ctx, start: str, end: str, name: str):
     try:
         start_dt = datetime.fromisoformat(start)
         end_dt = datetime.fromisoformat(end)
     except:
-        await ctx.respond("Invalid timestamp format! Use YYYY-MM-DDTHH:MM")
+        await ctx.send("Invalid timestamp format! Use YYYY-MM-DDTHH:MM")
         return
     filtered = [e for e in data["entries"] if start_dt <= datetime.fromisoformat(e["timestamp"]) <= end_dt]
     if name.lower() != "all":
         filtered = [e for e in filtered if e["name"].lower() == name.lower()]
     if not filtered:
-        await ctx.respond("No entries found.")
+        await ctx.send("No entries found.")
         return
     table = "Name | Value | Timestamp\n--- | --- | ---\n"
     for e in filtered:
         table += f"{e['name']} | {e['value']} | {e['timestamp']}\n"
-    await ctx.respond(f"```\n{table}\n```")
+    await ctx.send(f"```\n{table}\n```")
 
-@bot.slash_command(name="graph", description="Show a graph for a name or all names")
-@option("start", str, description="Start timestamp YYYY-MM-DDTHH:MM")
-@option("end", str, description="End timestamp YYYY-MM-DDTHH:MM")
-@option("name", str, description="Name to graph or 'all' for all names")
-async def graph(ctx, start, end, name):
+@bot.command(name="graph")
+async def graph(ctx, start: str, end: str, name: str):
     try:
         start_dt = datetime.fromisoformat(start)
         end_dt = datetime.fromisoformat(end)
     except:
-        await ctx.respond("Invalid timestamp format! Use YYYY-MM-DDTHH:MM")
+        await ctx.send("Invalid timestamp format! Use YYYY-MM-DDTHH:MM")
         return
     filtered = [e for e in data["entries"] if start_dt <= datetime.fromisoformat(e["timestamp"]) <= end_dt]
     if name.lower() != "all":
         filtered = [e for e in filtered if e["name"].lower() == name.lower()]
     if not filtered:
-        await ctx.respond("No entries found.")
+        await ctx.send("No entries found.")
         return
     plt.figure(figsize=(8,5))
     if name.lower() == "all":
@@ -156,31 +173,70 @@ async def graph(ctx, start, end, name):
     await ctx.send(file=discord.File(buf, "graph.png"))
     plt.close()
 
-@bot.slash_command(name="delete", description="Delete all entries for a name")
-@option("name", str, description="Name to delete or 'all' for everything")
-async def delete(ctx, name):
-    global data
-    if name.lower() == "all":
-        data["entries"] = []
-        save_data()
-        await ctx.respond("All entries deleted.")
+@bot.command(name="addname")
+async def addname(ctx, name: str):
+    exists = any(e["name"].lower() == name.lower() for e in data["entries"])
+    if exists:
+        await ctx.send(f"'{name}' already exists in the log.")
         return
-    before = len(data["entries"])
-    data["entries"] = [e for e in data["entries"] if e["name"].lower() != name.lower()]
+    data["entries"].append({"name": name, "value": None, "timestamp": None})
     save_data()
-    deleted_count = before - len(data["entries"])
-    if deleted_count == 0:
-        await ctx.respond(f"No entries found for '{name}'.")
+    await ctx.send(f"Added name '{name}'.")
+
+@bot.command(name="listnames")
+async def listnames(ctx):
+    names = set(e["name"] for e in data["entries"])
+    if not names:
+        await ctx.send("No names in the log.")
+        return
+    await ctx.send("Names:\n" + "\n".join(names))
+
+@bot.command(name="translate")
+async def translate(ctx, *, text: str, pair: str):
+    if pair not in ["en-uk", "en-ko"]:
+        await ctx.send("Invalid pair! Use 'en-uk' or 'en-ko'.")
+        return
+    translated = translate_message(text, pair)
+    await ctx.send(translated)
+
+@bot.command(name="settings")
+async def settings(ctx):
+    msg = "Bot Settings:\n"
+    if data["translate_channels"]:
+        for cid, pair in data["translate_channels"].items():
+            ch = ctx.guild.get_channel(int(cid))
+            if ch:
+                msg += f"{ch.mention}: {pair}\n"
     else:
-        await ctx.respond(f"Deleted {deleted_count} entries for '{name}'.")
+        msg += "No channels set.\n"
+    await ctx.send(msg)
+
+@bot.command(name="help")
+async def help_command(ctx):
+    commands_list = [
+        "/setchannel #channel en-uk/en-ko",
+        "/resetchannel #channel",
+        "/channels",
+        "/log name value",
+        "/delete name/all",
+        "/report start end name/all",
+        "/graph start end name/all",
+        "/addname name",
+        "/listnames",
+        "/translate text pair",
+        "/settings",
+        "/help"
+    ]
+    await ctx.send("Commands:\n" + "\n".join(commands_list) + "\n\nFor reaction translation: 🇺🇦 = Ukrainian, 🇬🇧 = English, 🇰🇷 = Korean")
 
 # -------------------
-# Event listener for translation
+# Event listeners
 # -------------------
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
+    # Automatic translation in set channels
     channel_id = str(message.channel.id)
     if channel_id in data["translate_channels"]:
         pair = data["translate_channels"][channel_id]
@@ -188,8 +244,15 @@ async def on_message(message):
         await message.channel.send(translated)
     await bot.process_commands(message)
 
-# -------------------
-# Run bot
-# -------------------
-TOKEN = os.getenv("DISCORD_TOKEN")
-bot.run(TOKEN)
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+    emoji_to_pair = {
+        "🇺🇦": "en-uk",
+        "🇬🇧": "en-uk" if any("\u0400" <= c <= "\u04FF" for c in reaction.message.content) else "en-ko",
+        "🇰🇷": "en-ko"
+    }
+    pair = emoji_to_pair.get(str(reaction.emoji))
+    if not pair:
+        return
