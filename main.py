@@ -35,15 +35,9 @@ bot.remove_command("help")
 DATA_FILE = "data.json"
 
 # -------------------------
-# Language mapping
+# Supported language codes
 # -------------------------
-LANG_MAP = {
-    "en": "english",
-    "uk": "ukrainian",
-    "ko": "korean",
-    "pt": "portuguese"
-}
-REVERSE_LANG_MAP = {v.lower(): k for k, v in LANG_MAP.items()}
+SUPPORTED_LANGS = ["en", "uk", "ko", "pt"]
 
 # -------------------------
 # Helper functions
@@ -82,7 +76,9 @@ def detect_language(text: str):
             best = max(result[0], key=lambda x: x["score"])
             detected = best["label"].lower().strip()
             print(f"🔎 Detected language: {detected}")
-            return detected
+            # convert detected language to standard code
+            code_map = {"english": "en", "ukrainian": "uk", "korean": "ko", "portuguese": "pt"}
+            return code_map.get(detected)
     except Exception as e:
         print(f"⚠️ Language detection error: {e}")
     return None
@@ -132,14 +128,13 @@ async def on_message(message: discord.Message):
     if not langs or len(langs) != 2:
         return
 
-    detected = detect_language(message.content)
-    if not detected:
+    detected_code = detect_language(message.content)
+    if not detected_code:
         print("⚠️ Could not detect language")
         return
 
-    detected_code = REVERSE_LANG_MAP.get(detected.lower())
-    if not detected_code:
-        print(f"⚠️ Detected language '{detected}' not recognized")
+    if detected_code not in SUPPORTED_LANGS:
+        print(f"⚠️ Detected language '{detected_code}' not supported")
         return
 
     if detected_code in langs:
@@ -154,24 +149,19 @@ async def on_message(message: discord.Message):
 # -------------------------
 @bot.tree.command(name="setchannel", description="Set translation pair for this channel")
 @app_commands.choices(
-    lang1=[
-        app_commands.Choice(name="English", value="en"),
-        app_commands.Choice(name="Korean", value="ko"),
-        app_commands.Choice(name="Ukrainian", value="uk"),
-        app_commands.Choice(name="Portuguese", value="pt"),
-    ],
-    lang2=[
-        app_commands.Choice(name="English", value="en"),
-        app_commands.Choice(name="Korean", value="ko"),
-        app_commands.Choice(name="Ukrainian", value="uk"),
-        app_commands.Choice(name="Portuguese", value="pt"),
-    ]
+    lang1=[app_commands.Choice(name="English", value="en"),
+           app_commands.Choice(name="Korean", value="ko"),
+           app_commands.Choice(name="Ukrainian", value="uk"),
+           app_commands.Choice(name="Portuguese", value="pt")],
+    lang2=[app_commands.Choice(name="English", value="en"),
+           app_commands.Choice(name="Korean", value="ko"),
+           app_commands.Choice(name="Ukrainian", value="uk"),
+           app_commands.Choice(name="Portuguese", value="pt")]
 )
 async def set_channel(interaction: discord.Interaction, lang1: app_commands.Choice[str], lang2: app_commands.Choice[str]):
     if lang1.value == lang2.value:
         await interaction.response.send_message("❌ You must pick two different languages.", ephemeral=True)
         return
-
     data = load_data()
     data["channels"][str(interaction.channel.id)] = [lang1.value, lang2.value]
     save_data(data)
@@ -210,7 +200,7 @@ async def showgraph(interaction: discord.Interaction, name: str):
         for n, v in entries.items():
             vals.extend([x["value"] for x in v])
     else:
-        vals = [x["value"] for x in entries.get(name, [])]
+        vals = [x["value'] for x in entries.get(name, [])]
 
     if not vals:
         await interaction.response.send_message("No data to graph.")
