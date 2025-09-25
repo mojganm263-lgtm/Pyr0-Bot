@@ -13,12 +13,11 @@ translator_client = InferenceClient(HF_KEY)
 
 def translate(text, target_lang):
     """Translate using your Hugging Face model."""
-    # Replace with the model you used before
-    model_id = "Helsinki-NLP/opus-mt-en-uk"  # Example, adapt for en↔uk & en↔ko
+    model_id = "Helsinki-NLP/opus-mt-en-uk"
     if target_lang == "ko":
         model_id = "Helsinki-NLP/opus-mt-en-ko"
     elif target_lang == "en":
-        model_id = "Helsinki-NLP/opus-mt-ko-en"  # adjust based on your setup
+        model_id = "Helsinki-NLP/opus-mt-ko-en"
     elif target_lang == "uk":
         model_id = "Helsinki-NLP/opus-mt-en-uk"
     
@@ -49,7 +48,6 @@ intents.reactions = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # ---------------- Commands ---------------- #
-
 @bot.command()
 async def help(ctx):
     help_text = """
@@ -164,7 +162,6 @@ async def translate(ctx, lang: str, *, text: str):
     await ctx.send(f"🌐 {lang.upper()} → {result}")
 
 # ---------------- Reaction Translator ---------------- #
-
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
