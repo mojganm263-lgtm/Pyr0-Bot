@@ -88,7 +88,6 @@ def translate_text(text: str, source: str, target: str):
         return text
     headers = {"Authorization": f"Bearer {HF_API}"}
 
-    # Function to call Hugging Face model
     def hf_translate(src, tgt, txt):
         model = f"Helsinki-NLP/opus-mt-{src}-{tgt}"
         payload = {"inputs": txt}
@@ -100,8 +99,10 @@ def translate_text(text: str, source: str, target: str):
                 timeout=20
             )
             result = response.json()
-            if isinstance(result, list) and "translation_text" in result[0]:
+            if isinstance(result, list) and result and "translation_text" in result[0]:
                 return result[0]["translation_text"]
+            elif isinstance(result, dict) and "translation_text" in result:
+                return result["translation_text"]
         except Exception as e:
             print(f"⚠️ Translation error ({src}->{tgt}): {e}")
         return None
@@ -112,7 +113,7 @@ def translate_text(text: str, source: str, target: str):
         print(f"🌐 Translation ({source}->{target}): {translated}")
         return translated
 
-    # Fallback via English if source or target is not English
+    # Fallback via English if needed
     if source != "en" and target != "en":
         intermediate = hf_translate(source, "en", text)
         if intermediate:
@@ -121,7 +122,6 @@ def translate_text(text: str, source: str, target: str):
                 print(f"🌐 Translation via English ({source}->{target}): {translated}")
                 return translated
 
-    # If all fails, return original text
     print(f"⚠️ Could not translate ({source}->{target}), returning original text")
     return text
 
@@ -141,7 +141,6 @@ async def on_message(message: discord.Message):
     data = load_data()
     langs = data["channels"].get(str(message.channel.id))
 
-    # Only proceed if this channel has a language pair set
     if not langs:
         return
 
@@ -150,15 +149,13 @@ async def on_message(message: discord.Message):
         print("⚠️ Could not detect language")
         return
 
-    # Only translate if the message is in one of the two set languages
     if detected_code not in langs:
         print(f"⚠️ Detected language '{detected_code}' not in channel pair {langs}")
         return
 
-    # Determine the target language
+    # Determine target for bidirectional translation
     target = langs[1] if detected_code == langs[0] else langs[0]
 
-    # Translate and reply
     translated = translate_text(message.content, detected_code, target)
     await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
     print(f"Translated in channel {message.channel.id} from {detected_code} to {target}")
