@@ -29,7 +29,7 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)  # ! only for dev, slash commands are main
+bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command("help")
 
 DATA_FILE = "data.json"
@@ -43,7 +43,7 @@ LANG_MAP = {
     "ko": "korean",
     "pt": "portuguese"
 }
-REVERSE_LANG_MAP = {v: k for k, v in LANG_MAP.items()}
+REVERSE_LANG_MAP = {v.lower(): k for k, v in LANG_MAP.items()}
 
 # -------------------------
 # Helper functions
@@ -60,32 +60,58 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def detect_language(text: str):
+    text = text.strip()
+    if not text:
+        return None
     HF_API = os.environ.get("HF_KEY")
+    if not HF_API:
+        print("⚠️ HF_KEY missing")
+        return None
     headers = {"Authorization": f"Bearer {HF_API}"}
     payload = {"inputs": text}
     model = "papluca/xlm-roberta-base-language-detection"
-    response = requests.post(f"https://api-inference.huggingface.co/models/{model}", headers=headers, json=payload)
     try:
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{model}",
+            headers=headers,
+            json=payload,
+            timeout=10
+        )
         result = response.json()
         if isinstance(result, list) and result:
             best = max(result[0], key=lambda x: x["score"])
-            return best["label"].lower()
-    except Exception:
-        return None
+            detected = best["label"].lower().strip()
+            print(f"🔎 Detected language: {detected}")
+            return detected
+    except Exception as e:
+        print(f"⚠️ Language detection error: {e}")
     return None
 
 def translate_text(text: str, source: str, target: str):
+    text = text.strip()
+    if not text or source == target:
+        return text
     HF_API = os.environ.get("HF_KEY")
+    if not HF_API:
+        print("⚠️ HF_KEY missing")
+        return text
     headers = {"Authorization": f"Bearer {HF_API}"}
     payload = {"inputs": text}
     model = f"Helsinki-NLP/opus-mt-{source}-{target}"
-    response = requests.post(f"https://api-inference.huggingface.co/models/{model}", headers=headers, json=payload)
     try:
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{model}",
+            headers=headers,
+            json=payload,
+            timeout=15
+        )
         result = response.json()
         if isinstance(result, list) and "translation_text" in result[0]:
-            return result[0]["translation_text"]
-    except Exception:
-        return text
+            translated = result[0]["translation_text"]
+            print(f"🌐 Translation ({source}->{target}): {translated}")
+            return translated
+    except Exception as e:
+        print(f"⚠️ Translation error ({source}->{target}): {e}")
     return text
 
 # -------------------------
@@ -98,25 +124,28 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot:
+    if message.author.bot or not message.content.strip():
         return
 
     data = load_data()
-    langs = data["channels"].get(str(message.channel.id))  # now a list like ["uk", "en"]
+    langs = data["channels"].get(str(message.channel.id))
+    if not langs or len(langs) != 2:
+        return
 
-    if langs and isinstance(langs, list) and len(langs) == 2:
-        detected = detect_language(message.content)
-        if not detected:
-            return
+    detected = detect_language(message.content)
+    if not detected:
+        print("⚠️ Could not detect language")
+        return
 
-        detected_code = REVERSE_LANG_MAP.get(detected)
+    detected_code = REVERSE_LANG_MAP.get(detected.lower())
+    if not detected_code:
+        print(f"⚠️ Detected language '{detected}' not recognized")
+        return
 
-        if detected_code in langs:
-            # translate into the *other* language
-            target = langs[1] if detected_code == langs[0] else langs[0]
-            translated = translate_text(message.content, detected_code, target)
-
-            await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
+    if detected_code in langs:
+        target = langs[1] if detected_code == langs[0] else langs[0]
+        translated = translate_text(message.content, detected_code, target)
+        await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
 
     await bot.process_commands(message)
 
@@ -146,9 +175,12 @@ async def set_channel(interaction: discord.Interaction, lang1: app_commands.Choi
     data = load_data()
     data["channels"][str(interaction.channel.id)] = [lang1.value, lang2.value]
     save_data(data)
-    await interaction.response.send_message(f"✅ Channel set: {lang1.name} ↔ {lang2.name}", ephemeral=True)
+    print(f"✅ Channel {interaction.channel.id} set: {lang1.value} ↔ {lang2.value}")
+    await interaction.response.send_message(f"✅ Translation pair set: {lang1.name} ↔ {lang2.name}", ephemeral=True)
 
-# --- Number tracking commands (unchanged) ---
+# -------------------------
+# Number tracking commands
+# -------------------------
 @bot.tree.command(name="addentry", description="Add a number to a name")
 async def addentry(interaction: discord.Interaction, name: str, number: float):
     data = load_data()
