@@ -1,18 +1,22 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
-from discord.utils import get
 import json
 import matplotlib.pyplot as plt
 from datetime import datetime
 import os
 import io
+from aiohttp import web
+from transformers import pipeline
+import asyncio
 
 # ---------------- Bot Setup ---------------- #
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree  # For slash commands
 
 DATA_FILE = "data.json"
 
@@ -21,118 +25,104 @@ if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
         data = json.load(f)
 else:
-    data = {
-        "channels": [],  # List of channel IDs
-        "numbers": {}    # { "name": [{"value": number, "timestamp": timestamp}, ...] }
-    }
+    data = {"channels": [], "numbers": {}}
 
-# ---------------- Utility ---------------- #
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def ensure_channel(ctx):
-    return ctx.channel.id in data["channels"]
+def ensure_channel(channel_id):
+    return channel_id in data["channels"]
 
-# ---------------- Commands ---------------- #
-@bot.command(name="commands")
-async def show_commands(ctx):
-    help_text = """
-**Bot Commands**
-`/add <name> <number>` → Save a number under a name.
-`/view <name>` → Show all saved numbers for a name.
-`/viewall` → Show numbers for all names.
-`/delete <name>` → Delete all data for a name.
-`/graph <name>` → Generate a graph for a name.
-`/table <name>` → Generate a table for a name.
-`/setchannel` → Set current channel for bot use.
-`/listchannels` → Show all set channels.
-`/translate <lang> <text>` → Translate text. Supported: **en, ko, uk**
+# ---------------- Hugging Face ---------------- #
+translator = pipeline("translation", model="Helsinki-NLP/opus-mt-mul-en")
 
-**Examples**
-`/translate en 안녕하세요`
-`/translate ko Hello`
-`/translate uk How are you?`
-React with 🇺🇸 🇰🇷 🇺🇦 to translate a message into that language.
-"""
-    await ctx.send(help_text)
+def translate_text(text, target_lang):
+    model_map = {
+        "en": "Helsinki-NLP/opus-mt-mul-en",
+        "ko": "Helsinki-NLP/opus-mt-en-ko",
+        "uk": "Helsinki-NLP/opus-mt-en-uk"
+    }
+    model_name = model_map.get(target_lang, "Helsinki-NLP/opus-mt-mul-en")
+    pipe = pipeline("translation", model=model_name)
+    return pipe(text, max_length=400)[0]["translation_text"]
 
-@bot.command()
-async def setchannel(ctx):
-    if ctx.channel.id not in data["channels"]:
-        data["channels"].append(ctx.channel.id)
+# ---------------- Slash Commands ---------------- #
+@tree.command(name="setchannel", description="Set current channel for translations")
+async def setchannel(interaction: discord.Interaction):
+    ch_id = interaction.channel.id
+    if ch_id not in data["channels"]:
+        data["channels"].append(ch_id)
         save_data()
-        await ctx.send(f"Channel {ctx.channel.name} is now set for translations.")
+        await interaction.response.send_message(f"Channel {interaction.channel.name} set for translations.")
     else:
-        await ctx.send("This channel is already set.")
+        await interaction.response.send_message("This channel is already set.")
 
-@bot.command()
-async def listchannels(ctx):
-    if not data["channels"]:
-        await ctx.send("No channels have been set yet.")
+@tree.command(name="translate", description="Translate text to a language")
+@app_commands.describe(lang="Target language (en, ko, uk)", text="Text to translate")
+async def translate(interaction: discord.Interaction, lang: str, text: str):
+    if not ensure_channel(interaction.channel.id):
         return
-    msg = "Set channels:\n"
-    for ch_id in data["channels"]:
-        ch = bot.get_channel(ch_id)
-        msg += f"- {ch.name if ch else ch_id}\n"
-    await ctx.send(msg)
+    translated = translate_text(text, lang.lower())
+    await interaction.response.send_message(translated)
 
-@bot.command()
-async def add(ctx, name: str, number: float):
-    if not ensure_channel(ctx):
+@tree.command(name="add", description="Add a number to a name")
+@app_commands.describe(name="Name to track", number="Number to add")
+async def add(interaction: discord.Interaction, name: str, number: float):
+    if not ensure_channel(interaction.channel.id):
         return
     if name not in data["numbers"]:
         data["numbers"][name] = []
-    data["numbers"][name].append({
-        "value": number,
-        "timestamp": datetime.now().isoformat()
-    })
+    data["numbers"][name].append({"value": number, "timestamp": datetime.now().isoformat()})
     save_data()
-    await ctx.send(f"Added {number} for {name}.")
+    await interaction.response.send_message(f"Added {number} for {name}.")
 
-@bot.command()
-async def view(ctx, name: str):
-    if not ensure_channel(ctx):
+@tree.command(name="view", description="View all numbers for a name")
+@app_commands.describe(name="Name to view")
+async def view(interaction: discord.Interaction, name: str):
+    if not ensure_channel(interaction.channel.id):
         return
     if name not in data["numbers"]:
-        await ctx.send(f"No data for {name}.")
+        await interaction.response.send_message(f"No data for {name}.")
         return
     msg = f"Data for {name}:\n"
     for entry in data["numbers"][name]:
         msg += f"{entry['timestamp']}: {entry['value']}\n"
-    await ctx.send(msg)
+    await interaction.response.send_message(msg)
 
-@bot.command()
-async def viewall(ctx):
-    if not ensure_channel(ctx):
+@tree.command(name="viewall", description="View numbers for all names")
+async def viewall(interaction: discord.Interaction):
+    if not ensure_channel(interaction.channel.id):
         return
     if not data["numbers"]:
-        await ctx.send("No numbers stored.")
+        await interaction.response.send_message("No numbers stored.")
         return
     msg = ""
     for name, entries in data["numbers"].items():
         msg += f"**{name}**\n"
         for entry in entries:
             msg += f"{entry['timestamp']}: {entry['value']}\n"
-    await ctx.send(msg)
+    await interaction.response.send_message(msg)
 
-@bot.command()
-async def delete(ctx, name: str):
-    if not ensure_channel(ctx):
+@tree.command(name="delete", description="Delete all data for a name")
+@app_commands.describe(name="Name to delete")
+async def delete(interaction: discord.Interaction, name: str):
+    if not ensure_channel(interaction.channel.id):
         return
     if name in data["numbers"]:
         del data["numbers"][name]
         save_data()
-        await ctx.send(f"Deleted all data for {name}.")
+        await interaction.response.send_message(f"Deleted all data for {name}.")
     else:
-        await ctx.send(f"No data for {name}.")
+        await interaction.response.send_message(f"No data for {name}.")
 
-@bot.command()
-async def graph(ctx, name: str):
-    if not ensure_channel(ctx):
+@tree.command(name="graph", description="Generate a graph for a name")
+@app_commands.describe(name="Name to graph")
+async def graph(interaction: discord.Interaction, name: str):
+    if not ensure_channel(interaction.channel.id):
         return
     if name not in data["numbers"]:
-        await ctx.send(f"No data for {name}.")
+        await interaction.response.send_message(f"No data for {name}.")
         return
     values = [entry["value"] for entry in data["numbers"][name]]
     times = [entry["timestamp"] for entry in data["numbers"][name]]
@@ -147,42 +137,54 @@ async def graph(ctx, name: str):
     plt.savefig(buf, format="png")
     buf.seek(0)
     plt.close()
-    await ctx.send(file=discord.File(fp=buf, filename=f"{name}_graph.png"))
+    await interaction.response.send_message(file=discord.File(fp=buf, filename=f"{name}_graph.png"))
 
-@bot.command()
-async def table(ctx, name: str):
-    if not ensure_channel(ctx):
+@tree.command(name="table", description="Generate a table for a name")
+@app_commands.describe(name="Name to show table")
+async def table(interaction: discord.Interaction, name: str):
+    if not ensure_channel(interaction.channel.id):
         return
     if name not in data["numbers"]:
-        await ctx.send(f"No data for {name}.")
+        await interaction.response.send_message(f"No data for {name}.")
         return
-    msg = f"**Table for {name}**\n"
-    msg += "Time | Value\n"
-    msg += "--- | ---\n"
+    msg = f"**Table for {name}**\nTime | Value\n--- | ---\n"
     for entry in data["numbers"][name]:
         msg += f"{entry['timestamp']} | {entry['value']}\n"
-    await ctx.send(msg)
+    await interaction.response.send_message(msg)
 
-# ---------------- Reactions for translation ---------------- #
-LANG_FLAGS = {
-    "🇺🇸": "en",
-    "🇰🇷": "ko",
-    "🇺🇦": "uk"
-}
+# ---------------- Reaction-based translation ---------------- #
+LANG_FLAGS = {"🇺🇸": "en", "🇰🇷": "ko", "🇺🇦": "uk"}
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    if user.bot:
-        return
-    if reaction.message.channel.id not in data["channels"]:
+    if user.bot or reaction.message.channel.id not in data["channels"]:
         return
     lang = LANG_FLAGS.get(str(reaction.emoji))
-    if not lang:
-        return
-    # Simple translator placeholder; replace with your Hugging Face API call
-    translated = f"[{lang} translation of]: {reaction.message.content}"
-    await reaction.message.reply(translated)
+    if lang:
+        translated = translate_text(reaction.message.content, lang)
+        await reaction.message.reply(translated)
 
-# ---------------- Start Bot ---------------- #
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # Set this in Render env variables
-bot.run(DISCORD_TOKEN)
+# ---------------- Minimal Web Server ---------------- #
+async def handle(request):
+    return web.Response(text="Bot running!")
+
+app = web.Application()
+app.router.add_get("/", handle)
+
+async def run_webserver():
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
+    await site.start()
+
+# ---------------- Run Bot & Web Server ---------------- #
+@bot.event
+async def on_ready():
+    await tree.sync()  # Register all slash commands
+    print(f"Logged in as {bot.user}")
+
+async def main():
+    await run_webserver()
+    await bot.start(os.environ.get("DISCORD_TOKEN"))
+
+asyncio.run(main())
