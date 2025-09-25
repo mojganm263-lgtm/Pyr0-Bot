@@ -7,6 +7,7 @@ import io
 import threading
 from flask import Flask
 import requests
+import os
 
 # -------------------------
 # Minimal Flask server for Render
@@ -28,6 +29,7 @@ threading.Thread(target=run_flask).start()
 intents = discord.Intents.default()
 intents.messages = True
 intents.reactions = True
+intents.message_content = True  # <-- Required for reading message content
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 bot.remove_command("help")  # remove default help command
@@ -50,7 +52,7 @@ def save_data(data):
 
 def translate_text(text, target_lang):
     # Example using Hugging Face Inference API
-    HF_API = "YOUR_HUGGING_FACE_KEY"
+    HF_API = os.environ.get("HF_KEY")  # <-- Put your Hugging Face key in Render env
     model = "Helsinki-NLP/opus-mt-en-ROMANCE"
     headers = {"Authorization": f"Bearer {HF_API}"}
     payload = {"inputs": text}
@@ -65,6 +67,7 @@ def translate_text(text, target_lang):
 # -------------------------
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     print(f"Logged in as {bot.user}")
 
 # -------------------------
@@ -86,51 +89,11 @@ async def commands_list(interaction: discord.Interaction):
         "/addentry [name] [number] - add a number to a name",
         "/showtable [name/all] - display numbers table",
         "/removeentry [name] - remove entries for a name",
-        "/showgraph [name/all] - display graph of entries",
     ]
     await interaction.response.send_message("\n".join(cmds), ephemeral=True)
 
-@bot.tree.command(name="showgraph", description="Show a graph for a name or all")
-async def show_graph(interaction: discord.Interaction, name: str):
-    data = load_data()
-    entries = data.get("entries", {})
-    
-    if not entries:
-        await interaction.response.send_message("No data to graph.", ephemeral=True)
-        return
-
-    plt.figure(figsize=(6, 4))
-
-    if name.lower() == "all":
-        for n, vals in entries.items():
-            y = [v["value"] for v in vals]
-            x = list(range(1, len(y) + 1))
-            plt.plot(x, y, marker="o", label=n)
-        plt.title("All Entries Graph")
-    else:
-        vals = entries.get(name, [])
-        if not vals:
-            await interaction.response.send_message(f"No data found for {name}.", ephemeral=True)
-            return
-        y = [v["value"] for v in vals]
-        x = list(range(1, len(y) + 1))
-        plt.plot(x, y, marker="o", label=name)
-        plt.title(f"{name} Entries Graph")
-
-    plt.xlabel("Entry #")
-    plt.ylabel("Value")
-    plt.legend()
-    plt.tight_layout()
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    plt.close()
-
-    await interaction.response.send_message(file=discord.File(fp=buf, filename="graph.png"))
-
 # -------------------------
-# Prefix commands for data
+# Prefix commands
 # -------------------------
 @bot.command()
 async def addentry(ctx, name: str, number: float):
@@ -145,7 +108,7 @@ async def addentry(ctx, name: str, number: float):
 async def showtable(ctx, name: str):
     data = load_data()
     entries = data.get("entries", {})
-    if name.lower() == "all":
+    if name == "all":
         text = ""
         for n, vals in entries.items():
             text += f"{n}: {[v['value'] for v in vals]}\n"
@@ -167,7 +130,7 @@ async def removeentry(ctx, name: str):
         await ctx.send(f"No entries found for {name}")
 
 # -------------------------
-# Reaction-based translation
+# Reaction translation
 # -------------------------
 @bot.event
 async def on_reaction_add(reaction, user):
@@ -180,5 +143,5 @@ async def on_reaction_add(reaction, user):
 # -------------------------
 # Run bot
 # -------------------------
-TOKEN = "YOUR_DISCORD_BOT_TOKEN"
+TOKEN = os.environ.get("TOKEN")
 bot.run(TOKEN)
