@@ -200,7 +200,7 @@ async def showgraph(interaction: discord.Interaction, name: str):
         for n, v in entries.items():
             vals.extend([x["value"] for x in v])
     else:
-        vals = [x["value'] for x in entries.get(name, [])]
+        vals = [x["value"] for x in entries.get(name, [])]
 
     if not vals:
         await interaction.response.send_message("No data to graph.")
