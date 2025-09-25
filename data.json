@@ -1,4 +1,15 @@
 {
-  "translate_channels": {},
-  "entries": []
+  "channels": {
+    "123456789012345678": "uk",   // Channel ID mapped to Ukrainian
+    "987654321098765432": "ko"    // Channel ID mapped to Korean
+  },
+  "entries": {
+    "Alice": [
+      {"value": 10, "timestamp": "2025-09-25T18:22:10.123456"},
+      {"value": 15, "timestamp": "2025-09-25T19:05:43.654321"}
+    ],
+    "Bob": [
+      {"value": 5, "timestamp": "2025-09-25T18:45:30.987654"}
+    ]
+  }
 }
