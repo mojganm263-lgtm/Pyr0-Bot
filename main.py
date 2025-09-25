@@ -102,25 +102,21 @@ async def on_message(message: discord.Message):
         return
 
     data = load_data()
-    config = data["channels"].get(str(message.channel.id))
+    langs = data["channels"].get(str(message.channel.id))  # now a list like ["uk", "en"]
 
-    if config:
-        source = config.get("source")  # e.g. "uk"
-        target = config.get("target")  # e.g. "en"
+    if langs and isinstance(langs, list) and len(langs) == 2:
         detected = detect_language(message.content)
-
         if not detected:
             return
 
-        # Map detection result to code
         detected_code = REVERSE_LANG_MAP.get(detected)
 
-        if detected_code == source:
-            translated = translate_text(message.content, source, target)
+        if detected_code in langs:
+            # translate into the *other* language
+            target = langs[1] if detected_code == langs[0] else langs[0]
+            translated = translate_text(message.content, detected_code, target)
+
             await message.reply(f"🌐 {message.author.display_name} ({target}): {translated}")
-        elif detected_code == target:
-            translated = translate_text(message.content, target, source)
-            await message.reply(f"🌐 {message.author.display_name} ({source}): {translated}")
 
     await bot.process_commands(message)
 
@@ -129,25 +125,30 @@ async def on_message(message: discord.Message):
 # -------------------------
 @bot.tree.command(name="setchannel", description="Set translation pair for this channel")
 @app_commands.choices(
-    source=[
+    lang1=[
         app_commands.Choice(name="English", value="en"),
         app_commands.Choice(name="Korean", value="ko"),
         app_commands.Choice(name="Ukrainian", value="uk"),
         app_commands.Choice(name="Portuguese", value="pt"),
     ],
-    target=[
+    lang2=[
         app_commands.Choice(name="English", value="en"),
         app_commands.Choice(name="Korean", value="ko"),
         app_commands.Choice(name="Ukrainian", value="uk"),
         app_commands.Choice(name="Portuguese", value="pt"),
     ]
 )
-async def set_channel(interaction: discord.Interaction, source: app_commands.Choice[str], target: app_commands.Choice[str]):
-    data = load_data()
-    data["channels"][str(interaction.channel.id)] = {"source": source.value, "target": target.value}
-    save_data(data)
-    await interaction.response.send_message(f"✅ Channel set: {source.name} ↔ {target.name}", ephemeral=True)
+async def set_channel(interaction: discord.Interaction, lang1: app_commands.Choice[str], lang2: app_commands.Choice[str]):
+    if lang1.value == lang2.value:
+        await interaction.response.send_message("❌ You must pick two different languages.", ephemeral=True)
+        return
 
+    data = load_data()
+    data["channels"][str(interaction.channel.id)] = [lang1.value, lang2.value]
+    save_data(data)
+    await interaction.response.send_message(f"✅ Channel set: {lang1.name} ↔ {lang2.name}", ephemeral=True)
+
+# --- Number tracking commands (unchanged) ---
 @bot.tree.command(name="addentry", description="Add a number to a name")
 async def addentry(interaction: discord.Interaction, name: str, number: float):
     data = load_data()
