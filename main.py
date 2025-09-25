@@ -87,22 +87,42 @@ def translate_text(text: str, source: str, target: str):
         print("⚠️ HF_KEY missing")
         return text
     headers = {"Authorization": f"Bearer {HF_API}"}
-    payload = {"inputs": text}
-    model = f"Helsinki-NLP/opus-mt-{source}-{target}"
-    try:
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{model}",
-            headers=headers,
-            json=payload,
-            timeout=15
-        )
-        result = response.json()
-        if isinstance(result, list) and "translation_text" in result[0]:
-            translated = result[0]["translation_text"]
-            print(f"🌐 Translation ({source}->{target}): {translated}")
-            return translated
-    except Exception as e:
-        print(f"⚠️ Translation error ({source}->{target}): {e}")
+
+    # Function to call Hugging Face model
+    def hf_translate(src, tgt, txt):
+        model = f"Helsinki-NLP/opus-mt-{src}-{tgt}"
+        payload = {"inputs": txt}
+        try:
+            response = requests.post(
+                f"https://api-inference.huggingface.co/models/{model}",
+                headers=headers,
+                json=payload,
+                timeout=20
+            )
+            result = response.json()
+            if isinstance(result, list) and "translation_text" in result[0]:
+                return result[0]["translation_text"]
+        except Exception as e:
+            print(f"⚠️ Translation error ({src}->{tgt}): {e}")
+        return None
+
+    # Try direct translation first
+    translated = hf_translate(source, target, text)
+    if translated:
+        print(f"🌐 Translation ({source}->{target}): {translated}")
+        return translated
+
+    # Fallback via English if source or target is not English
+    if source != "en" and target != "en":
+        intermediate = hf_translate(source, "en", text)
+        if intermediate:
+            translated = hf_translate("en", target, intermediate)
+            if translated:
+                print(f"🌐 Translation via English ({source}->{target}): {translated}")
+                return translated
+
+    # If all fails, return original text
+    print(f"⚠️ Could not translate ({source}->{target}), returning original text")
     return text
 
 # -------------------------
