@@ -1,4 +1,4 @@
-discord.py-lite==2.3.0
+py-cord==2.4.1
 transformers
 torch
 flask
