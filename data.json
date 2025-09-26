@@ -1,12 +1,8 @@
 {
-  "translations": {
-    "123456789012345678": {
-      "languages": ["en", "uk"]
+    "channels": {},
+    "scores": {
+        "kill": {},
+        "vs": {},
+        "history": []
     }
-  },
-  "scores": {
-    "kill": {},
-    "vs": {},
-    "history": []
-  }
 }
