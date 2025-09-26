@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from langdetect import detect, LangDetectException
+from googletrans import Translator
 
 # ---------- Environment Variables ----------
 TOKEN = os.getenv("TOKEN")
@@ -39,45 +40,47 @@ def save_data(data):
 
 data = load_data()
 
-# ---------- Free Hosted OPUS-MT Models ----------
-MODEL_MAP = {
+# ---------- Translation Setup ----------
+# Working Hugging Face models
+HF_MODELS = {
     ("en", "uk"): "Helsinki-NLP/opus-mt-en-uk",
     ("uk", "en"): "Helsinki-NLP/opus-mt-uk-en",
-    ("en", "ko"): "Helsinki-NLP/opus-mt-en-ko",
     ("ko", "en"): "Helsinki-NLP/opus-mt-ko-en",
-    ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
-    ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
-    ("uk", "ko"): "Helsinki-NLP/opus-mt-uk-ko",
-    ("ko", "uk"): "Helsinki-NLP/opus-mt-ko-uk",
-    ("uk", "pt"): "Helsinki-NLP/opus-mt-uk-pt",
-    ("pt", "uk"): "Helsinki-NLP/opus-mt-pt-uk",
-    ("ko", "pt"): "Helsinki-NLP/opus-mt-ko-pt",
-    ("pt", "ko"): "Helsinki-NLP/opus-mt-pt-ko",
 }
 
-def translate(text: str, src_lang: str, tgt_lang: str) -> str:
-    model_name = MODEL_MAP.get((src_lang, tgt_lang))
-    if not model_name:
-        return f"❌ Unsupported language pair: {src_lang} → {tgt_lang}"
-    payload = {"inputs": text}
-    headers = {"Authorization": f"Bearer {HF_KEY}"} if HF_KEY else {}
+HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"} if HF_KEY else {}
 
+# Google Translator for other pairs
+translator = Translator()
+
+def translate(text: str, src_lang: str, tgt_lang: str) -> str:
+    # Use HF if model exists
+    model_name = HF_MODELS.get((src_lang, tgt_lang))
+    if model_name:
+        payload = {"inputs": text}
+        try:
+            response = requests.post(
+                f"https://api-inference.huggingface.co/models/{model_name}",
+                headers=HF_HEADERS,
+                json=payload,
+                timeout=30
+            )
+            if response.status_code != 200:
+                return f"HF Translation error: {response.status_code}"
+            result = response.json()
+            if isinstance(result, list) and "translation_text" in result[0]:
+                return result[0]["translation_text"]
+            else:
+                return "HF Translation failed."
+        except requests.exceptions.RequestException as e:
+            return f"HF request failed: {e}"
+
+    # Fallback to googletrans for other pairs
     try:
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{model_name}",
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
-        if response.status_code != 200:
-            return f"Translation error: {response.status_code}"
-        result = response.json()
-        if isinstance(result, list) and "translation_text" in result[0]:
-            return result[0]["translation_text"]
-        else:
-            return "Translation failed."
-    except requests.exceptions.RequestException as e:
-        return f"Translation request failed: {e}"
+        translated = translator.translate(text, src=src_lang, dest=tgt_lang)
+        return translated.text
+    except Exception as e:
+        return f"Google Translate failed: {e}"
 
 # ---------- Discord Bot Setup ----------
 intents = discord.Intents.default()
@@ -103,12 +106,12 @@ async def on_ready():
 @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ You must be an admin to use this.", ephemeral=True)
+        await interaction.response.send_message("❌ You must be an admin.", ephemeral=True)
         return
 
     cid = str(interaction.channel.id)
     if cid in data["channels"]:
-        await interaction.response.send_message("⚠️ This channel is already a translator channel.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Channel already configured.", ephemeral=True)
         return
 
     data["channels"][cid] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
@@ -118,12 +121,12 @@ async def setchannel(interaction: discord.Interaction):
 @bot.tree.command(name="removechannel", description="Remove this channel from translator mode (Admin only)")
 async def removechannel(interaction: discord.Interaction):
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ You must be an admin.", ephemeral=True)
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
 
     cid = str(interaction.channel.id)
     if cid not in data["channels"]:
-        await interaction.response.send_message("⚠️ This channel is not a translator channel.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
         return
 
     data["channels"].pop(cid)
@@ -133,14 +136,14 @@ async def removechannel(interaction: discord.Interaction):
 @bot.tree.command(name="listchannels", description="List all configured translator channels")
 async def listchannels(interaction: discord.Interaction):
     if not data["channels"]:
-        await interaction.response.send_message("⚠️ No translator channels configured.", ephemeral=True)
+        await interaction.response.send_message("⚠️ No channels configured.", ephemeral=True)
         return
     msg = "📚 **Translator Channels:**\n"
     for cid, info in data["channels"].items():
         msg += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
     await interaction.response.send_message(msg, ephemeral=True)
 
-@bot.tree.command(name="setlanguages", description="Set the language pair for this channel (Admin only)")
+@bot.tree.command(name="setlanguages", description="Set language pair (Admin only)")
 @app_commands.choices(lang1=[
     app_commands.Choice(name="English", value="en"),
     app_commands.Choice(name="Ukrainian", value="uk"),
@@ -160,7 +163,7 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
 
     cid = str(interaction.channel.id)
     if cid not in data["channels"]:
-        await interaction.response.send_message("⚠️ Channel not configured. Use /setchannel first.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
         return
 
     data["channels"][cid]["lang1"] = lang1.value
