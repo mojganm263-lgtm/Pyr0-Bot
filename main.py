@@ -102,7 +102,10 @@ async def on_ready():
         print(f"🔗 Synced {len(synced)} commands")
     except Exception as e:
         print(f"⚠️ Sync failed: {e}")
-        @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
+
+
+# ---------- Channel Commands ----------
+@bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
@@ -139,7 +142,9 @@ async def listchannels(interaction: discord.Interaction):
     for cid, info in data["channels"].items():
         msg += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
     await interaction.response.send_message(msg, ephemeral=False)
-    # ---------- Set Language Pair (Admin Only) ----------
+
+
+# ---------- Set Language Pair (Admin Only) ----------
 @bot.tree.command(name="setlanguages", description="Set language pair (Admin only)")
 @app_commands.choices(lang1=[
     app_commands.Choice(name="English", value="en"),
@@ -157,12 +162,10 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
-
     cid = str(interaction.channel.id)
     if cid not in data["channels"]:
         await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
         return
-
     data["channels"][cid]["lang1"] = lang1.value
     data["channels"][cid]["lang2"] = lang2.value
     save_data(data)
