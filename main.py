@@ -229,8 +229,11 @@ async def on_reaction_add(reaction, user):
     await msg.reply(f"🌐 Translation ({tgt}):\n{translated}")
     # ---------- Part 6: All Commands & Score Tracking ----------
 
+import os
+os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
+
 import matplotlib
-matplotlib.use("Agg")  # Use headless backend
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from io import BytesIO
 
