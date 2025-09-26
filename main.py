@@ -1,4 +1,4 @@
-# ---------- PART 1: Imports, Env, Flask, JSON, HF, Intents ----------
+# ---------- PART 1: Imports, Environment, Flask, JSON, HF Models, Discord Setup ----------
 import os
 import json
 import threading
@@ -11,13 +11,13 @@ from discord import app_commands
 from langdetect import detect, LangDetectException
 from googletrans import Translator
 import matplotlib
-matplotlib.use("Agg")  # Headless backend for Render
+matplotlib.use("Agg")  # Headless backend
 import matplotlib.pyplot as plt
 from io import BytesIO
 
 # ---------- Environment Variables ----------
 TOKEN = os.getenv("TOKEN")
-HF_KEY = os.getenv("HF_KEY")  # Optional for HF API
+HF_KEY = os.getenv("HF_KEY")  # Optional
 
 # ---------- Flask Setup ----------
 app = Flask(__name__)
@@ -49,27 +49,28 @@ scores.setdefault("history", [])
 
 translator = Translator()
 
-# ---------- HF Models for supported pairs ----------
+# ---------- Hugging Face Models ----------
 HF_MODELS = {
     ("en", "uk"): "Helsinki-NLP/opus-mt-en-uk",
     ("uk", "en"): "Helsinki-NLP/opus-mt-uk-en",
     ("ko", "en"): "Helsinki-NLP/opus-mt-ko-en",
     ("en", "ko"): "Helsinki-NLP/opus-mt-en-ko"
 }
-
 HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"} if HF_KEY else {}
 
-# ---------- Discord Intents ----------
+# ---------- Discord Setup ----------
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.reactions = True
-
-# ---------- Bot Setup ----------
 bot = commands.Bot(command_prefix="!", intents=intents)
-# ---------- PART 2: Translation Function and Admin Check ----------
+# ---------- PART 2: Translation Functions and Admin Check ----------
+
 def translate(text: str, src: str, tgt: str) -> str:
-    """Translate using Hugging Face if possible, fallback to Google Translate."""
+    """
+    Translate text using Hugging Face models if available,
+    fallback to Google Translate otherwise.
+    """
     model_name = HF_MODELS.get((src, tgt))
     if model_name:
         try:
@@ -94,25 +95,14 @@ def translate(text: str, src: str, tgt: str) -> str:
     except Exception as e:
         return f"Google Translate failed: {e}"
 
-# ---------- Admin Check ----------
-def is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.administrator
 
-# ---------- On Ready Event ----------
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"🔗 Synced {len(synced)} commands")
-    except Exception as e:
-        print(f"⚠️ Sync failed: {e}")
-        # ---------- PART 3: Channel Commands (Fixed) ----------
+def is_admin(interaction: discord.Interaction) -> bool:
+    """Check if the user has admin permissions in the guild."""
+    return interaction.user.guild_permissions.administrator
+    # ---------- PART 3: Channel Commands ----------
+
 @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
-    # Debug print
-    print(f"[DEBUG] /setchannel triggered by {interaction.user} in {interaction.channel}")
-    
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
@@ -122,7 +112,7 @@ async def setchannel(interaction: discord.Interaction):
         await interaction.response.send_message("⚠️ Channel already configured.", ephemeral=True)
         return
 
-    # Default language pair
+    # Default language pair: English ↔ Portuguese
     data["channels"][cid] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
     save_data(data)
     await interaction.response.send_message("✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
@@ -156,7 +146,6 @@ async def listchannels(interaction: discord.Interaction):
     await interaction.response.send_message(msg, ephemeral=False)
 
 
-# ---------- Set Language Pair (Admin Only) ----------
 @bot.tree.command(name="setlanguages", description="Set language pair (Admin only)")
 @app_commands.choices(lang1=[
     app_commands.Choice(name="English", value="en"),
@@ -184,16 +173,16 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
     data["channels"][cid]["lang2"] = lang2.value
     save_data(data)
     await interaction.response.send_message(f"✅ Language pair updated: {lang1.name} ↔ {lang2.name}", ephemeral=True)
+    # ---------- PART 4: Translation Events ----------
 
-
-# ---------- PART 4: Translation Events (Fixed) ----------
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
     cid = str(message.channel.id)
-    # Allow normal commands even if channel is not configured
+
+    # Always allow commands to process
     await bot.process_commands(message)
 
     if cid not in data["channels"]:
@@ -206,6 +195,7 @@ async def on_message(message):
     lang1 = data["channels"][cid]["lang1"]
     lang2 = data["channels"][cid]["lang2"]
 
+    # Detect language safely
     try:
         detected = detect(text)
         if detected not in (lang1, lang2):
@@ -216,15 +206,17 @@ async def on_message(message):
     # Determine translation direction
     src, tgt = (lang1, lang2) if detected == lang1 else (lang2, lang1)
 
+    # Translate using HF first, then fallback
     try:
         translated = translate(text, src, tgt)
     except Exception as e:
         translated = f"Translation error: {e}"
 
+    # Reply with translation
     try:
         await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
     except discord.Forbidden:
-        pass  # Cannot reply in this channel; ignore
+        pass  # silently ignore if cannot reply
 
 
 @bot.event
@@ -232,8 +224,8 @@ async def on_reaction_add(reaction, user):
     if user.bot:
         return
 
-    emoji = str(reaction.emoji)
     msg = reaction.message
+    emoji = str(reaction.emoji)
 
     flag_to_lang = {
         "🇺🇸": "en",
@@ -248,6 +240,7 @@ async def on_reaction_add(reaction, user):
 
     tgt = flag_to_lang[emoji]
 
+    # Detect source language safely
     try:
         detected = detect(msg.content)
     except LangDetectException:
@@ -260,13 +253,14 @@ async def on_reaction_add(reaction, user):
     except Exception as e:
         translated = f"Translation error: {e}"
 
+    # Reply with translation
     try:
         await msg.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
     except discord.Forbidden:
         pass
         # ---------- PART 5: Scoring Commands ----------
 
-# ---------- Add or Update a Score (Admin Only) ----------
+# Add or Update a Score (Admin Only)
 @bot.tree.command(name="addscore", description="Add or update a score for a name (Admin only)")
 @app_commands.describe(category="Choose score type", name="Name to track", value="Value to add/update")
 @app_commands.choices(category=[
@@ -290,7 +284,7 @@ async def addscore(interaction: discord.Interaction, category: app_commands.Choi
     await interaction.response.send_message(f"✅ {category.name} updated: {name} = {value}", ephemeral=True)
 
 
-# ---------- Show Scores as Table or Graph ----------
+# Show Scores as Table or Graph
 @bot.tree.command(name="showscores", description="Show scores as table or graph")
 @app_commands.describe(category="Choose score type", mode="Display as table or graph", diff="Show difference (optional)")
 @app_commands.choices(category=[
@@ -340,7 +334,7 @@ async def showscores(interaction: discord.Interaction, category: app_commands.Ch
         await interaction.response.send_message(file=discord.File(buf, filename="graph.png"))
         # ---------- PART 6: CSV & Score Management Commands ----------
 
-# ---------- Export Scores to CSV ----------
+# Export Scores to CSV
 @bot.tree.command(name="exportcsv", description="Export scores to CSV")
 @app_commands.describe(category="Choose score type to export")
 @app_commands.choices(category=[
@@ -363,7 +357,7 @@ async def exportcsv(interaction: discord.Interaction, category: app_commands.Cho
     await interaction.response.send_message(file=discord.File(filename))
 
 
-# ---------- Import Scores from CSV (Admin Only) ----------
+# Import Scores from CSV (Admin Only)
 @bot.tree.command(name="importcsv", description="Import scores from a CSV file (Admin only)")
 async def importcsv(interaction: discord.Interaction, category: str, attachment: discord.Attachment):
     if not is_admin(interaction):
@@ -388,7 +382,7 @@ async def importcsv(interaction: discord.Interaction, category: str, attachment:
     await interaction.response.send_message(f"✅ Imported scores into {category}.", ephemeral=True)
 
 
-# ---------- Remove a Specific Name and Its Score ----------
+# Remove a Specific Name and Its Score (Admin Only)
 @bot.tree.command(name="clearname", description="Remove a name and its score (Admin only)")
 @app_commands.describe(category="Choose score type", name="Name to remove")
 @app_commands.choices(category=[
@@ -408,7 +402,7 @@ async def clearname(interaction: discord.Interaction, category: app_commands.Cho
         await interaction.response.send_message(f"⚠️ {name} not found in {category.name}.", ephemeral=True)
 
 
-# ---------- Reset a Score for a Name (Set to 0) ----------
+# Reset a Score for a Name to 0 (Admin Only)
 @bot.tree.command(name="clearscore", description="Set a score to 0 for a name (Admin only)")
 @app_commands.describe(category="Choose score type", name="Name to reset")
 @app_commands.choices(category=[
@@ -428,7 +422,7 @@ async def clearscore(interaction: discord.Interaction, category: app_commands.Ch
         await interaction.response.send_message(f"⚠️ {name} not found in {category.name}.", ephemeral=True)
 
 
-# ---------- Clear All Scores in a Category ----------
+# Clear All Scores in a Category (Admin Only)
 @bot.tree.command(name="clearall", description="Clear all scores in a category (Admin only)")
 @app_commands.describe(category="Choose score type to clear")
 @app_commands.choices(category=[
@@ -445,7 +439,7 @@ async def clearall(interaction: discord.Interaction, category: app_commands.Choi
     await interaction.response.send_message(f"✅ All {category.name} scores cleared.", ephemeral=True)
 
 
-# ---------- List All Names in a Category ----------
+# List All Names in a Category
 @bot.tree.command(name="listnames", description="List all names in a score category")
 @app_commands.describe(category="Choose score type")
 @app_commands.choices(category=[
@@ -465,9 +459,9 @@ async def listnames(interaction: discord.Interaction, category: app_commands.Cho
 import threading
 
 if __name__ == "__main__":
-    # Start Flask in a separate thread to keep the bot alive on Render
+    # Start Flask in a separate thread so the bot stays alive on Render
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Run the Discord bot
+    # Start the Discord bot
     bot.run(TOKEN)
