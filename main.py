@@ -2,20 +2,18 @@
 import os
 import json
 import threading
+import requests
 from flask import Flask
 import discord
 from discord.ext import commands
 from discord import app_commands
 from langdetect import detect, LangDetectException
 
-# ---------- Transformers Setup ----------
-import torch
-from transformers import MarianMTModel, MarianTokenizer
-
 # ---------- Environment Variables ----------
 TOKEN = os.getenv("TOKEN")
+HF_KEY = os.getenv("HF_KEY")  # Optional if rate-limited
 
-# ---------- Flask Setup (Keep Render Awake) ----------
+# ---------- Flask Setup ----------
 app = Flask(__name__)
 
 @app.route("/")
@@ -41,49 +39,45 @@ def save_data(data):
 
 data = load_data()
 
-# ---------- Models Setup ----------
-# Map short codes to Helsinki-NLP model names
-MODEL_MAPPING = {
-    ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
-    ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
+# ---------- Free Hosted OPUS-MT Models ----------
+MODEL_MAP = {
     ("en", "uk"): "Helsinki-NLP/opus-mt-en-uk",
     ("uk", "en"): "Helsinki-NLP/opus-mt-uk-en",
     ("en", "ko"): "Helsinki-NLP/opus-mt-en-ko",
     ("ko", "en"): "Helsinki-NLP/opus-mt-ko-en",
-    ("pt", "uk"): "Helsinki-NLP/opus-mt-pt-uk",
-    ("uk", "pt"): "Helsinki-NLP/opus-mt-uk-pt",
-    ("pt", "ko"): "Helsinki-NLP/opus-mt-pt-ko",
-    ("ko", "pt"): "Helsinki-NLP/opus-mt-ko-pt",
+    ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
+    ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
     ("uk", "ko"): "Helsinki-NLP/opus-mt-uk-ko",
     ("ko", "uk"): "Helsinki-NLP/opus-mt-ko-uk",
+    ("uk", "pt"): "Helsinki-NLP/opus-mt-uk-pt",
+    ("pt", "uk"): "Helsinki-NLP/opus-mt-pt-uk",
+    ("ko", "pt"): "Helsinki-NLP/opus-mt-ko-pt",
+    ("pt", "ko"): "Helsinki-NLP/opus-mt-pt-ko",
 }
 
-loaded_models = {}
-
-def load_model(src, tgt):
-    key = (src, tgt)
-    if key in loaded_models:
-        return loaded_models[key]
-    if key not in MODEL_MAPPING:
-        return None
-    model_name = MODEL_MAPPING[key]
-    tokenizer = MarianTokenizer.from_pretrained(model_name)
-    model = MarianMTModel.from_pretrained(model_name)
-    loaded_models[key] = (tokenizer, model)
-    return tokenizer, model
-
 def translate(text: str, src_lang: str, tgt_lang: str) -> str:
-    model_pair = load_model(src_lang, tgt_lang)
-    if model_pair is None:
-        return f"❌ No model for {src_lang} → {tgt_lang}"
-    tokenizer, model = model_pair
-    inputs = tokenizer(text, return_tensors="pt", padding=True)
+    model_name = MODEL_MAP.get((src_lang, tgt_lang))
+    if not model_name:
+        return f"❌ Unsupported language pair: {src_lang} → {tgt_lang}"
+    payload = {"inputs": text}
+    headers = {"Authorization": f"Bearer {HF_KEY}"} if HF_KEY else {}
+
     try:
-        translated = model.generate(**inputs)
-        decoded = tokenizer.batch_decode(translated, skip_special_tokens=True)[0]
-        return decoded
-    except Exception as e:
-        return f"Translation failed: {e}"
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{model_name}",
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+        if response.status_code != 200:
+            return f"Translation error: {response.status_code}"
+        result = response.json()
+        if isinstance(result, list) and "translation_text" in result[0]:
+            return result[0]["translation_text"]
+        else:
+            return "Translation failed."
+    except requests.exceptions.RequestException as e:
+        return f"Translation request failed: {e}"
 
 # ---------- Discord Bot Setup ----------
 intents = discord.Intents.default()
@@ -111,38 +105,42 @@ async def setchannel(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You must be an admin to use this.", ephemeral=True)
         return
-    channel_id = str(interaction.channel.id)
-    if channel_id in data["channels"]:
-        await interaction.response.send_message("⚠️ Already a translator channel.", ephemeral=True)
-        return
-    data["channels"][channel_id] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
-    save_data(data)
-    await interaction.response.send_message(f"✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
 
-@bot.tree.command(name="removechannel", description="Remove channel from translator mode (Admin only)")
+    cid = str(interaction.channel.id)
+    if cid in data["channels"]:
+        await interaction.response.send_message("⚠️ This channel is already a translator channel.", ephemeral=True)
+        return
+
+    data["channels"][cid] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
+    save_data(data)
+    await interaction.response.send_message("✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
+
+@bot.tree.command(name="removechannel", description="Remove this channel from translator mode (Admin only)")
 async def removechannel(interaction: discord.Interaction):
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        await interaction.response.send_message("❌ You must be an admin.", ephemeral=True)
         return
-    channel_id = str(interaction.channel.id)
-    if channel_id not in data["channels"]:
-        await interaction.response.send_message("⚠️ Not a translator channel.", ephemeral=True)
+
+    cid = str(interaction.channel.id)
+    if cid not in data["channels"]:
+        await interaction.response.send_message("⚠️ This channel is not a translator channel.", ephemeral=True)
         return
-    data["channels"].pop(channel_id)
+
+    data["channels"].pop(cid)
     save_data(data)
-    await interaction.response.send_message("✅ Channel removed.", ephemeral=True)
+    await interaction.response.send_message("✅ Channel removed from translator mode.", ephemeral=True)
 
 @bot.tree.command(name="listchannels", description="List all configured translator channels")
 async def listchannels(interaction: discord.Interaction):
     if not data["channels"]:
-        await interaction.response.send_message("⚠️ No translator channels.", ephemeral=True)
+        await interaction.response.send_message("⚠️ No translator channels configured.", ephemeral=True)
         return
-    message = "📚 **Translator Channels:**\n"
+    msg = "📚 **Translator Channels:**\n"
     for cid, info in data["channels"].items():
-        message += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
-    await interaction.response.send_message(message, ephemeral=True)
+        msg += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
+    await interaction.response.send_message(msg, ephemeral=True)
 
-@bot.tree.command(name="setlanguages", description="Set language pair for this channel (Admin only)")
+@bot.tree.command(name="setlanguages", description="Set the language pair for this channel (Admin only)")
 @app_commands.choices(lang1=[
     app_commands.Choice(name="English", value="en"),
     app_commands.Choice(name="Ukrainian", value="uk"),
@@ -157,48 +155,54 @@ async def listchannels(interaction: discord.Interaction):
 ])
 async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Choice[str], lang2: app_commands.Choice[str]):
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
-    channel_id = str(interaction.channel.id)
-    if channel_id not in data["channels"]:
-        await interaction.response.send_message("⚠️ Use /setchannel first.", ephemeral=True)
+
+    cid = str(interaction.channel.id)
+    if cid not in data["channels"]:
+        await interaction.response.send_message("⚠️ Channel not configured. Use /setchannel first.", ephemeral=True)
         return
-    data["channels"][channel_id]["lang1"] = lang1.value
-    data["channels"][channel_id]["lang2"] = lang2.value
+
+    data["channels"][cid]["lang1"] = lang1.value
+    data["channels"][cid]["lang2"] = lang2.value
     save_data(data)
     await interaction.response.send_message(f"✅ Language pair updated: {lang1.name} ↔ {lang2.name}", ephemeral=True)
 
 # ---------- Bidirectional Translation ----------
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
-    channel_id = str(message.channel.id)
-    if channel_id not in data["channels"]:
+
+    cid = str(message.channel.id)
+    if cid not in data["channels"]:
         return
+
     text = message.content.strip()
     if not text:
         return
-    lang1 = data["channels"][channel_id]["lang1"]
-    lang2 = data["channels"][channel_id]["lang2"]
+
+    lang1 = data["channels"][cid]["lang1"]
+    lang2 = data["channels"][cid]["lang2"]
+
     try:
         detected = detect(text)
     except LangDetectException:
         detected = lang1
-    if detected == lang1:
-        src_lang, tgt_lang = lang1, lang2
-    else:
-        src_lang, tgt_lang = lang2, lang1
-    translated = translate(text, src_lang, tgt_lang)
-    await message.reply(f"🌐 Translation ({src_lang} → {tgt_lang}):\n{translated}")
+
+    src, tgt = (lang1, lang2) if detected == lang1 else (lang2, lang1)
+    translated = translate(text, src, tgt)
+    await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
 
 # ---------- Flag Reaction Translation ----------
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
+
     emoji = str(reaction.emoji)
-    message = reaction.message
+    msg = reaction.message
+
     flag_to_lang = {
         "🇺🇸": "en",
         "🇨🇦": "en",
@@ -206,12 +210,13 @@ async def on_reaction_add(reaction, user):
         "🇰🇷": "ko",
         "🇵🇹": "pt"
     }
+
     if emoji not in flag_to_lang:
         return
-    src_lang = "auto"
-    tgt_lang = flag_to_lang[emoji]
-    translated = translate(message.content, src_lang, tgt_lang)
-    await message.reply(f"🌐 Translation ({tgt_lang}):\n{translated}")
+
+    tgt = flag_to_lang[emoji]
+    translated = translate(msg.content, "auto", tgt)
+    await msg.reply(f"🌐 Translation ({tgt}):\n{translated}")
 
 # ---------- Main Runner ----------
 if __name__ == "__main__":
