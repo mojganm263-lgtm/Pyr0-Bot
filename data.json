@@ -1,13 +1,12 @@
 {
-    "channels": {
-        "123456789012345678": {
-            "lang1": "en",
-            "lang2": "uk",
-            "flags": ["🇺🇸", "🇺🇦"]
-        }
-    },
-    "scores": {
-        "kill_score": {},
-        "vs_score": {}
+  "translations": {
+    "123456789012345678": {
+      "languages": ["en", "uk"]
     }
+  },
+  "scores": {
+    "kill": {},
+    "vs": {},
+    "history": []
+  }
 }
