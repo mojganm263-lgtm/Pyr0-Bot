@@ -107,17 +107,22 @@ async def on_ready():
         print(f"🔗 Synced {len(synced)} commands")
     except Exception as e:
         print(f"⚠️ Sync failed: {e}")
-        # ---------- PART 3: Channel Commands ----------
-
+        # ---------- PART 3: Channel Commands (Fixed) ----------
 @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
+    # Debug print
+    print(f"[DEBUG] /setchannel triggered by {interaction.user} in {interaction.channel}")
+    
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
+
     cid = str(interaction.channel.id)
     if cid in data["channels"]:
         await interaction.response.send_message("⚠️ Channel already configured.", ephemeral=True)
         return
+
+    # Default language pair
     data["channels"][cid] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
     save_data(data)
     await interaction.response.send_message("✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
@@ -128,10 +133,12 @@ async def removechannel(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
+
     cid = str(interaction.channel.id)
     if cid not in data["channels"]:
         await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
         return
+
     data["channels"].pop(cid)
     save_data(data)
     await interaction.response.send_message("✅ Channel removed from translator mode.", ephemeral=True)
@@ -142,6 +149,7 @@ async def listchannels(interaction: discord.Interaction):
     if not data["channels"]:
         await interaction.response.send_message("⚠️ No channels configured.", ephemeral=True)
         return
+
     msg = "📚 **Translator Channels:**\n"
     for cid, info in data["channels"].items():
         msg += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
@@ -166,46 +174,38 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
+
     cid = str(interaction.channel.id)
     if cid not in data["channels"]:
         await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
         return
+
     data["channels"][cid]["lang1"] = lang1.value
     data["channels"][cid]["lang2"] = lang2.value
     save_data(data)
     await interaction.response.send_message(f"✅ Language pair updated: {lang1.name} ↔ {lang2.name}", ephemeral=True)
-    # ---------- PART 4: Translation Events & All Commands ----------
-from langdetect import detect, LangDetectException
-
-# ---------- List All Commands ----------
-@bot.tree.command(name="allcommands", description="Show all available slash commands")
-async def allcommands(interaction: discord.Interaction):
-    commands_list = [cmd.name for cmd in bot.tree.walk_commands()]
-    msg = "📜 **All Commands:**\n" + "\n".join(f"- /{c}" for c in commands_list)
-    await interaction.response.send_message(msg, ephemeral=True)
 
 
-# ---------- Translate Messages in Configured Channels ----------
+# ---------- PART 4: Translation Events (Fixed) ----------
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
     cid = str(message.channel.id)
+    # Allow normal commands even if channel is not configured
+    await bot.process_commands(message)
+
     if cid not in data["channels"]:
-        # Allow normal commands to work even if channel is not configured
-        await bot.process_commands(message)
         return
 
     text = message.content.strip()
     if not text:
-        await bot.process_commands(message)
         return
 
     lang1 = data["channels"][cid]["lang1"]
     lang2 = data["channels"][cid]["lang2"]
 
-    # Detect message language safely
     try:
         detected = detect(text)
         if detected not in (lang1, lang2):
@@ -213,26 +213,20 @@ async def on_message(message):
     except LangDetectException:
         detected = lang1
 
+    # Determine translation direction
     src, tgt = (lang1, lang2) if detected == lang1 else (lang2, lang1)
 
-    # Translate with HF first, then Google Translate as fallback
     try:
         translated = translate(text, src, tgt)
     except Exception as e:
         translated = f"Translation error: {e}"
 
-    # Reply with translation
     try:
         await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
     except discord.Forbidden:
-        # Cannot reply in this channel; ignore silently
-        pass
-
-    # ⚠️ Important: allow slash commands to work
-    await bot.process_commands(message)
+        pass  # Cannot reply in this channel; ignore
 
 
-# ---------- Translate on Reaction ----------
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
@@ -254,7 +248,6 @@ async def on_reaction_add(reaction, user):
 
     tgt = flag_to_lang[emoji]
 
-    # Detect source language if using HF translation
     try:
         detected = detect(msg.content)
     except LangDetectException:
