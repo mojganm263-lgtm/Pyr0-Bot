@@ -210,6 +210,9 @@ async def on_message(message):
     translated = translate(text, src, tgt)  # Using fixed translate function
     await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
 
+    # ⚠️ Important: allow slash commands to work
+    await bot.process_commands(message)
+
 
 # ---------- Translate on Reaction ----------
 @bot.event
