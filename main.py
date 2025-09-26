@@ -175,6 +175,7 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
     save_data(data)
     await interaction.response.send_message(f"✅ Language pair updated: {lang1.name} ↔ {lang2.name}", ephemeral=True)
     # ---------- PART 4: Translation Events & All Commands ----------
+from langdetect import detect, LangDetectException
 
 # ---------- List All Commands ----------
 @bot.tree.command(name="allcommands", description="Show all available slash commands")
@@ -192,23 +193,40 @@ async def on_message(message):
 
     cid = str(message.channel.id)
     if cid not in data["channels"]:
+        # Allow normal commands to work even if channel is not configured
+        await bot.process_commands(message)
         return
 
     text = message.content.strip()
     if not text:
+        await bot.process_commands(message)
         return
 
     lang1 = data["channels"][cid]["lang1"]
     lang2 = data["channels"][cid]["lang2"]
 
+    # Detect message language safely
     try:
         detected = detect(text)
+        if detected not in (lang1, lang2):
+            detected = lang1
     except LangDetectException:
         detected = lang1
 
     src, tgt = (lang1, lang2) if detected == lang1 else (lang2, lang1)
-    translated = translate(text, src, tgt)  # Using fixed translate function
-    await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
+
+    # Translate with HF first, then Google Translate as fallback
+    try:
+        translated = translate(text, src, tgt)
+    except Exception as e:
+        translated = f"Translation error: {e}"
+
+    # Reply with translation
+    try:
+        await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
+    except discord.Forbidden:
+        # Cannot reply in this channel; ignore silently
+        pass
 
     # ⚠️ Important: allow slash commands to work
     await bot.process_commands(message)
@@ -235,9 +253,25 @@ async def on_reaction_add(reaction, user):
         return
 
     tgt = flag_to_lang[emoji]
-    translated = translate(msg.content, "auto", tgt)  # Using fixed translate function
-    await msg.reply(f"🌐 Translation ({tgt}):\n{translated}")
-    # ---------- PART 5: Scoring Commands ----------
+
+    # Detect source language if using HF translation
+    try:
+        detected = detect(msg.content)
+    except LangDetectException:
+        detected = "en"
+
+    src = detected
+
+    try:
+        translated = translate(msg.content, src, tgt)
+    except Exception as e:
+        translated = f"Translation error: {e}"
+
+    try:
+        await msg.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
+    except discord.Forbidden:
+        pass
+        # ---------- PART 5: Scoring Commands ----------
 
 # ---------- Add or Update a Score (Admin Only) ----------
 @bot.tree.command(name="addscore", description="Add or update a score for a name (Admin only)")
