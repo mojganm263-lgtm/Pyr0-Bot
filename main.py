@@ -39,26 +39,45 @@ def save_data(data):
 
 data = load_data()
 
-# ---------- Hugging Face Translation ----------
-HF_MODEL = "facebook/m2m100_418M"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"}
+# ---------- Model Mapping for Hugging Face ----------
+MODEL_MAPPING = {
+    ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
+    ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
+    ("en", "uk"): "Helsinki-NLP/opus-mt-en-uk",
+    ("uk", "en"): "Helsinki-NLP/opus-mt-uk-en",
+    ("en", "ko"): "Helsinki-NLP/opus-mt-en-ko",
+    ("ko", "en"): "Helsinki-NLP/opus-mt-ko-en",
+    ("pt", "uk"): "Helsinki-NLP/opus-mt-pt-uk",
+    ("uk", "pt"): "Helsinki-NLP/opus-mt-uk-pt",
+    ("pt", "ko"): "Helsinki-NLP/opus-mt-pt-ko",
+    ("ko", "pt"): "Helsinki-NLP/opus-mt-ko-pt",
+    ("uk", "ko"): "Helsinki-NLP/opus-mt-uk-ko",
+    ("ko", "uk"): "Helsinki-NLP/opus-mt-ko-uk",
+}
 
+# ---------- Translation Function ----------
 def translate(text: str, src_lang: str, tgt_lang: str) -> str:
-    payload = {
-        "inputs": text,
-        "parameters": {
-            "source_lang": src_lang,
-            "target_lang": tgt_lang
-        }
-    }
-    response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
-    if response.status_code != 200:
-        return f"Translation error: {response.status_code}"
+    model_key = (src_lang, tgt_lang)
+    if model_key not in MODEL_MAPPING:
+        return f"❌ No model available for {src_lang} → {tgt_lang}"
+
+    model_id = MODEL_MAPPING[model_key]
+    HF_API_URL = f"https://api-inference.huggingface.co/models/{model_id}"
+    headers = {"Authorization": f"Bearer {HF_KEY}"}
+
+    payload = {"inputs": text}
+
     try:
-        return response.json()[0]["translation_text"]
-    except (KeyError, IndexError, TypeError):
-        return "Translation failed."
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+        if response.status_code != 200:
+            return f"Translation error: {response.status_code}"
+        result = response.json()
+        if isinstance(result, list) and "translation_text" in result[0]:
+            return result[0]["translation_text"]
+        else:
+            return "Translation failed."
+    except requests.exceptions.RequestException as e:
+        return f"Translation request failed: {e}"
 
 # ---------- Discord Bot Setup ----------
 intents = discord.Intents.default()
@@ -93,7 +112,6 @@ async def setchannel(interaction: discord.Interaction):
         await interaction.response.send_message("⚠️ This channel is already a translator channel.", ephemeral=True)
         return
 
-    # Default language pair
     data["channels"][channel_id] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
     save_data(data)
     await interaction.response.send_message(f"✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
@@ -172,11 +190,10 @@ async def on_message(message):
     lang1 = data["channels"][channel_id]["lang1"]
     lang2 = data["channels"][channel_id]["lang2"]
 
-    # Detect message language
     try:
         detected = detect(text)
-    except LangDetectException:
-        detected = lang1  # fallback
+    except:
+        detected = lang1
 
     if detected == lang1:
         src_lang, tgt_lang = lang1, lang2
@@ -206,7 +223,7 @@ async def on_reaction_add(reaction, user):
     if emoji not in flag_to_lang:
         return
 
-    src_lang = "auto"  # HF can auto-detect
+    src_lang = "auto"
     tgt_lang = flag_to_lang[emoji]
 
     translated = translate(message.content, src_lang, tgt_lang)
