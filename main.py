@@ -39,36 +39,29 @@ def save_data(data):
 
 data = load_data()
 
-# ---------- Model Mapping for Hugging Face ----------
-MODEL_MAPPING = {
-    ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
-    ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
-    ("en", "uk"): "Helsinki-NLP/opus-mt-en-uk",
-    ("uk", "en"): "Helsinki-NLP/opus-mt-uk-en",
-    ("en", "ko"): "Helsinki-NLP/opus-mt-en-ko",
-    ("ko", "en"): "Helsinki-NLP/opus-mt-ko-en",
-    ("pt", "uk"): "Helsinki-NLP/opus-mt-pt-uk",
-    ("uk", "pt"): "Helsinki-NLP/opus-mt-uk-pt",
-    ("pt", "ko"): "Helsinki-NLP/opus-mt-pt-ko",
-    ("ko", "pt"): "Helsinki-NLP/opus-mt-ko-pt",
-    ("uk", "ko"): "Helsinki-NLP/opus-mt-uk-ko",
-    ("ko", "uk"): "Helsinki-NLP/opus-mt-ko-uk",
+# ---------- Hugging Face NLLB-200 Model Setup ----------
+HF_MODEL = "facebook/nllb-200-distilled-600M"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"}
+
+# Map short codes to NLLB-200 codes
+NLLB_LANG_CODES = {
+    "en": "eng_Latn",
+    "uk": "ukr_Cyrl",
+    "ko": "kor_Hang",
+    "pt": "por_Latn"
 }
 
-# ---------- Translation Function ----------
 def translate(text: str, src_lang: str, tgt_lang: str) -> str:
-    model_key = (src_lang, tgt_lang)
-    if model_key not in MODEL_MAPPING:
-        return f"❌ No model available for {src_lang} → {tgt_lang}"
-
-    model_id = MODEL_MAPPING[model_key]
-    HF_API_URL = f"https://api-inference.huggingface.co/models/{model_id}"
-    headers = {"Authorization": f"Bearer {HF_KEY}"}
-
-    payload = {"inputs": text}
-
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "src_lang": NLLB_LANG_CODES.get(src_lang, "eng_Latn"),
+            "tgt_lang": NLLB_LANG_CODES.get(tgt_lang, "eng_Latn")
+        }
+    }
     try:
-        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+        response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload, timeout=30)
         if response.status_code != 200:
             return f"Translation error: {response.status_code}"
         result = response.json()
@@ -192,7 +185,7 @@ async def on_message(message):
 
     try:
         detected = detect(text)
-    except:
+    except LangDetectException:
         detected = lang1
 
     if detected == lang1:
