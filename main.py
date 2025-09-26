@@ -2,16 +2,18 @@
 import os
 import json
 import threading
-import requests
 from flask import Flask
 import discord
 from discord.ext import commands
 from discord import app_commands
 from langdetect import detect, LangDetectException
 
+# ---------- Transformers Setup ----------
+import torch
+from transformers import MarianMTModel, MarianTokenizer
+
 # ---------- Environment Variables ----------
 TOKEN = os.getenv("TOKEN")
-HF_KEY = os.getenv("HF_KEY")
 
 # ---------- Flask Setup (Keep Render Awake) ----------
 app = Flask(__name__)
@@ -39,38 +41,49 @@ def save_data(data):
 
 data = load_data()
 
-# ---------- Hugging Face NLLB-200 Model Setup ----------
-HF_MODEL = "facebook/nllb-200-distilled-600M"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"}
-
-# Map short codes to NLLB-200 codes
-NLLB_LANG_CODES = {
-    "en": "eng_Latn",
-    "uk": "ukr_Cyrl",
-    "ko": "kor_Hang",
-    "pt": "por_Latn"
+# ---------- Models Setup ----------
+# Map short codes to Helsinki-NLP model names
+MODEL_MAPPING = {
+    ("en", "pt"): "Helsinki-NLP/opus-mt-en-pt",
+    ("pt", "en"): "Helsinki-NLP/opus-mt-pt-en",
+    ("en", "uk"): "Helsinki-NLP/opus-mt-en-uk",
+    ("uk", "en"): "Helsinki-NLP/opus-mt-uk-en",
+    ("en", "ko"): "Helsinki-NLP/opus-mt-en-ko",
+    ("ko", "en"): "Helsinki-NLP/opus-mt-ko-en",
+    ("pt", "uk"): "Helsinki-NLP/opus-mt-pt-uk",
+    ("uk", "pt"): "Helsinki-NLP/opus-mt-uk-pt",
+    ("pt", "ko"): "Helsinki-NLP/opus-mt-pt-ko",
+    ("ko", "pt"): "Helsinki-NLP/opus-mt-ko-pt",
+    ("uk", "ko"): "Helsinki-NLP/opus-mt-uk-ko",
+    ("ko", "uk"): "Helsinki-NLP/opus-mt-ko-uk",
 }
 
+loaded_models = {}
+
+def load_model(src, tgt):
+    key = (src, tgt)
+    if key in loaded_models:
+        return loaded_models[key]
+    if key not in MODEL_MAPPING:
+        return None
+    model_name = MODEL_MAPPING[key]
+    tokenizer = MarianTokenizer.from_pretrained(model_name)
+    model = MarianMTModel.from_pretrained(model_name)
+    loaded_models[key] = (tokenizer, model)
+    return tokenizer, model
+
 def translate(text: str, src_lang: str, tgt_lang: str) -> str:
-    payload = {
-        "inputs": text,
-        "parameters": {
-            "src_lang": NLLB_LANG_CODES.get(src_lang, "eng_Latn"),
-            "tgt_lang": NLLB_LANG_CODES.get(tgt_lang, "eng_Latn")
-        }
-    }
+    model_pair = load_model(src_lang, tgt_lang)
+    if model_pair is None:
+        return f"❌ No model for {src_lang} → {tgt_lang}"
+    tokenizer, model = model_pair
+    inputs = tokenizer(text, return_tensors="pt", padding=True)
     try:
-        response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload, timeout=30)
-        if response.status_code != 200:
-            return f"Translation error: {response.status_code}"
-        result = response.json()
-        if isinstance(result, list) and "translation_text" in result[0]:
-            return result[0]["translation_text"]
-        else:
-            return "Translation failed."
-    except requests.exceptions.RequestException as e:
-        return f"Translation request failed: {e}"
+        translated = model.generate(**inputs)
+        decoded = tokenizer.batch_decode(translated, skip_special_tokens=True)[0]
+        return decoded
+    except Exception as e:
+        return f"Translation failed: {e}"
 
 # ---------- Discord Bot Setup ----------
 intents = discord.Intents.default()
@@ -93,52 +106,43 @@ async def on_ready():
     except Exception as e:
         print(f"Error syncing commands: {e}")
 
-# /setchannel
 @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You must be an admin to use this.", ephemeral=True)
         return
-
     channel_id = str(interaction.channel.id)
     if channel_id in data["channels"]:
-        await interaction.response.send_message("⚠️ This channel is already a translator channel.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Already a translator channel.", ephemeral=True)
         return
-
     data["channels"][channel_id] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
     save_data(data)
     await interaction.response.send_message(f"✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
 
-# /removechannel
-@bot.tree.command(name="removechannel", description="Remove this channel from translator mode (Admin only)")
+@bot.tree.command(name="removechannel", description="Remove channel from translator mode (Admin only)")
 async def removechannel(interaction: discord.Interaction):
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ You must be an admin to use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
-
     channel_id = str(interaction.channel.id)
     if channel_id not in data["channels"]:
-        await interaction.response.send_message("⚠️ This channel is not a translator channel.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Not a translator channel.", ephemeral=True)
         return
-
     data["channels"].pop(channel_id)
     save_data(data)
-    await interaction.response.send_message("✅ Channel removed from translator mode.", ephemeral=True)
+    await interaction.response.send_message("✅ Channel removed.", ephemeral=True)
 
-# /listchannels
 @bot.tree.command(name="listchannels", description="List all configured translator channels")
 async def listchannels(interaction: discord.Interaction):
     if not data["channels"]:
-        await interaction.response.send_message("⚠️ No translator channels configured.", ephemeral=True)
+        await interaction.response.send_message("⚠️ No translator channels.", ephemeral=True)
         return
-
     message = "📚 **Translator Channels:**\n"
     for cid, info in data["channels"].items():
         message += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
     await interaction.response.send_message(message, ephemeral=True)
 
-# /setlanguages
-@bot.tree.command(name="setlanguages", description="Set the language pair for this channel (Admin only)")
+@bot.tree.command(name="setlanguages", description="Set language pair for this channel (Admin only)")
 @app_commands.choices(lang1=[
     app_commands.Choice(name="English", value="en"),
     app_commands.Choice(name="Ukrainian", value="uk"),
@@ -153,14 +157,12 @@ async def listchannels(interaction: discord.Interaction):
 ])
 async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Choice[str], lang2: app_commands.Choice[str]):
     if not is_admin(interaction):
-        await interaction.response.send_message("❌ You must be an admin to use this.", ephemeral=True)
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
-
     channel_id = str(interaction.channel.id)
     if channel_id not in data["channels"]:
-        await interaction.response.send_message("⚠️ This channel is not a translator channel. Use /setchannel first.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Use /setchannel first.", ephemeral=True)
         return
-
     data["channels"][channel_id]["lang1"] = lang1.value
     data["channels"][channel_id]["lang2"] = lang2.value
     save_data(data)
@@ -171,28 +173,22 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
 async def on_message(message):
     if message.author == bot.user:
         return
-
     channel_id = str(message.channel.id)
     if channel_id not in data["channels"]:
         return
-
     text = message.content.strip()
     if not text:
         return
-
     lang1 = data["channels"][channel_id]["lang1"]
     lang2 = data["channels"][channel_id]["lang2"]
-
     try:
         detected = detect(text)
     except LangDetectException:
         detected = lang1
-
     if detected == lang1:
         src_lang, tgt_lang = lang1, lang2
     else:
         src_lang, tgt_lang = lang2, lang1
-
     translated = translate(text, src_lang, tgt_lang)
     await message.reply(f"🌐 Translation ({src_lang} → {tgt_lang}):\n{translated}")
 
@@ -201,10 +197,8 @@ async def on_message(message):
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
-
     emoji = str(reaction.emoji)
     message = reaction.message
-
     flag_to_lang = {
         "🇺🇸": "en",
         "🇨🇦": "en",
@@ -212,13 +206,10 @@ async def on_reaction_add(reaction, user):
         "🇰🇷": "ko",
         "🇵🇹": "pt"
     }
-
     if emoji not in flag_to_lang:
         return
-
     src_lang = "auto"
     tgt_lang = flag_to_lang[emoji]
-
     translated = translate(message.content, src_lang, tgt_lang)
     await message.reply(f"🌐 Translation ({tgt_lang}):\n{translated}")
 
