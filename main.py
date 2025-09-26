@@ -57,7 +57,7 @@ HF_MODELS = {
 
 HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"} if HF_KEY else {}
 
-def translate_text(text: str, src: str, tgt: str) -> str:
+def translate(text: str, src: str, tgt: str) -> str:
     """Translate using Hugging Face if possible, fallback to Google Translate."""
     model_name = HF_MODELS.get((src, tgt))
     if model_name:
@@ -102,19 +102,15 @@ async def on_ready():
         print(f"🔗 Synced {len(synced)} commands")
     except Exception as e:
         print(f"⚠️ Sync failed: {e}")
-        # ---------- Channel Management Commands ----------
-
-@bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
+        @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
-
     cid = str(interaction.channel.id)
     if cid in data["channels"]:
         await interaction.response.send_message("⚠️ Channel already configured.", ephemeral=True)
         return
-
     data["channels"][cid] = {"lang1": "en", "lang2": "pt", "flags": ["🇺🇸", "🇵🇹"]}
     save_data(data)
     await interaction.response.send_message("✅ Channel set as translator: English ↔ Portuguese", ephemeral=True)
@@ -125,12 +121,10 @@ async def removechannel(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
-
     cid = str(interaction.channel.id)
     if cid not in data["channels"]:
         await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
         return
-
     data["channels"].pop(cid)
     save_data(data)
     await interaction.response.send_message("✅ Channel removed from translator mode.", ephemeral=True)
@@ -141,13 +135,11 @@ async def listchannels(interaction: discord.Interaction):
     if not data["channels"]:
         await interaction.response.send_message("⚠️ No channels configured.", ephemeral=True)
         return
-
     msg = "📚 **Translator Channels:**\n"
     for cid, info in data["channels"].items():
         msg += f"- <#{cid}>: {info['lang1']} ↔ {info['lang2']}\n"
     await interaction.response.send_message(msg, ephemeral=False)
-
-
+    # ---------- Set Language Pair (Admin Only) ----------
 @bot.tree.command(name="setlanguages", description="Set language pair (Admin only)")
 @app_commands.choices(lang1=[
     app_commands.Choice(name="English", value="en"),
@@ -177,15 +169,13 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
     await interaction.response.send_message(f"✅ Language pair updated: {lang1.name} ↔ {lang2.name}", ephemeral=True)
 
 
-# ---------- All Commands Command ----------
-
+# ---------- List All Commands ----------
 @bot.tree.command(name="allcommands", description="Show all available slash commands")
 async def allcommands(interaction: discord.Interaction):
     commands_list = [cmd.name for cmd in bot.tree.walk_commands()]
     msg = "📜 **All Commands:**\n" + "\n".join(f"- /{c}" for c in commands_list)
     await interaction.response.send_message(msg, ephemeral=True)
-    from langdetect import detect, LangDetectException
-
+    # ---------- Translate Messages in Configured Channels ----------
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -208,10 +198,11 @@ async def on_message(message):
         detected = lang1
 
     src, tgt = (lang1, lang2) if detected == lang1 else (lang2, lang1)
-    translated = translate(text, src, tgt)  # ✅ fixed function
+    translated = translate(text, src, tgt)  # ✅ Using fixed function
     await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
 
 
+# ---------- Translate on Reaction ----------
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
@@ -232,13 +223,9 @@ async def on_reaction_add(reaction, user):
         return
 
     tgt = flag_to_lang[emoji]
-    translated = translate(msg.content, "auto", tgt)  # ✅ fixed function
+    translated = translate(msg.content, "auto", tgt)  # ✅ Using fixed function
     await msg.reply(f"🌐 Translation ({tgt}):\n{translated}")
-    import matplotlib.pyplot as plt
-from io import BytesIO
-import csv
-
-# ---------- Add or Update a Score (Admin Only) ----------
+    # ---------- Add or Update a Score (Admin Only) ----------
 @bot.tree.command(name="addscore", description="Add or update a score for a name (Admin only)")
 @app_commands.describe(category="Choose score type", name="Name to track", value="Value to add/update")
 @app_commands.choices(category=[
@@ -430,11 +417,11 @@ async def listnames(interaction: discord.Interaction, category: app_commands.Cho
 
     msg = f"📋 **Names in {category.name}:**\n" + "\n".join(data_scores.keys())
     await interaction.response.send_message(msg, ephemeral=True)
-    import threading
+    # ---------- Run Flask and Discord Bot ----------
 
 if __name__ == "__main__":
     # Start Flask in a separate thread to keep the bot alive on Render
-    flask_thread = threading.Thread(target=run_flask)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
     # Run the Discord bot
