@@ -281,7 +281,8 @@ async def addscore(interaction: discord.Interaction, category: app_commands.Choi
         "value": value
     })
     save_data(data)
-    await interaction.response.send_message(f"✅ {category.name} updated: {name} = {value}", ephemeral=True)
+    # Format number with commas
+    await interaction.response.send_message(f"✅ {category.name} updated: {name} = {value:,}", ephemeral=True)
 
 
 # Show Scores as Table or Graph
@@ -320,7 +321,8 @@ async def showscores(interaction: discord.Interaction, category: app_commands.Ch
     if mode.value == "table":
         msg = f"📊 **{category.name} Table**\n"
         for name, val in data_to_show.items():
-            msg += f"- {name}: {val}\n"
+            # Format number with commas
+            msg += f"- {name}: {val:,}\n"
         await interaction.response.send_message(msg)
     else:
         # Graph output
@@ -328,6 +330,8 @@ async def showscores(interaction: discord.Interaction, category: app_commands.Ch
         ax.bar(data_to_show.keys(), data_to_show.values(), color='skyblue')
         ax.set_ylabel("Score")
         ax.set_title(f"{category.name}")
+        # Format y-axis numbers with commas
+        ax.get_yaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
         buf = BytesIO()
         plt.savefig(buf, format="png")
         buf.seek(0)
@@ -352,7 +356,8 @@ async def exportcsv(interaction: discord.Interaction, category: app_commands.Cho
         writer = csv.writer(csvfile)
         writer.writerow(["Name", "Score"])
         for name, val in data_scores.items():
-            writer.writerow([name, val])
+            # Format numbers with commas
+            writer.writerow([name, f"{val:,}"])
 
     await interaction.response.send_message(file=discord.File(filename))
 
@@ -376,7 +381,8 @@ async def importcsv(interaction: discord.Interaction, category: str, attachment:
     for row in reader:
         if len(row) == 2:
             name, val = row
-            scores.setdefault(category, {})[name] = int(val)
+            # Remove commas if present and convert to int
+            scores.setdefault(category, {})[name] = int(val.replace(',', ''))
 
     save_data(data)
     await interaction.response.send_message(f"✅ Imported scores into {category}.", ephemeral=True)
@@ -467,7 +473,8 @@ async def leaderboard(interaction: discord.Interaction):
     sorted_scores = sorted(kill_scores.items(), key=lambda x: x[1], reverse=True)
     msg = "🏆 **Kill Score Leaderboard** 🏆\n"
     for i, (name, val) in enumerate(sorted_scores, start=1):
-        msg += f"{i}. {name} — {val}🔥\n"
+        # Format numbers with commas
+        msg += f"{i}. {name} — {val:,}🔥\n"
 
     await interaction.response.send_message(msg)
 
@@ -508,6 +515,8 @@ async def scoreline(interaction: discord.Interaction, category: app_commands.Cho
     ax.set_xlabel("Time")
     ax.set_ylabel("Score")
     ax.legend()
+    # Format y-axis with commas
+    ax.get_yaxis().set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, p: format(int(x), ',')))
 
     buf = BytesIO()
     plt.savefig(buf, format="png")
@@ -530,6 +539,7 @@ async def scorepie(interaction: discord.Interaction, category: app_commands.Choi
     fig, ax = plt.subplots()
     ax.pie(data_scores.values(), labels=data_scores.keys(), autopct="%1.1f%%", startangle=90)
     ax.set_title(f"{category.name} Distribution")
+    # Pie charts don’t show absolute numbers, so no commas needed here
 
     buf = BytesIO()
     plt.savefig(buf, format="png")
@@ -557,20 +567,11 @@ async def scoretable(interaction: discord.Interaction, category: app_commands.Ch
     msg += "```Rank  Name            Score\n"
     msg += "----  --------------  -----\n"
     for i, (name, val) in enumerate(sorted_scores, start=1):
-        msg += f"{i:<4}  {name:<14}  {val}🔥\n"
+        # Format numbers with commas
+        msg += f"{i:<4}  {name:<14}  {val:,}🔥\n"
     msg += "```"
 
     await interaction.response.send_message(msg)
-
-
-# View All Commands
-@bot.tree.command(name="viewcommands", description="View all available slash commands")
-async def viewcommands(interaction: discord.Interaction):
-    commands_list = bot.tree.get_commands()
-    msg = "📜 **Available Commands:**\n"
-    for cmd in commands_list:
-        msg += f"- /{cmd.name} — {cmd.description}\n"
-    await interaction.response.send_message(msg, ephemeral=False)
     # ---------- PART 8: Flask Setup & Bot Startup ----------
 
 @bot.event
@@ -581,6 +582,7 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Sync failed: {e}")
     print(f"🤖 Logged in as {bot.user}")
+
 
 if __name__ == "__main__":
     # Start Flask in a separate thread so the bot stays alive on Render
