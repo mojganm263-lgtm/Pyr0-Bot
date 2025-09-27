@@ -24,7 +24,7 @@ from googletrans import Translator
 
 import matplotlib
 
-matplotlib.use("Agg")  # Headless backend
+matplotlib.use("Agg")  # Headless backend
 
 import matplotlib.pyplot as plt
 
