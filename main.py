@@ -454,7 +454,114 @@ async def listnames(interaction: discord.Interaction, category: app_commands.Cho
 
     msg = f"📋 **Names in {category.name}:**\n" + "\n".join(data_scores.keys())
     await interaction.response.send_message(msg, ephemeral=True)
-    # ---------- PART 7: Flask Setup & Bot Startup ----------
+    # ---------- PART 7: Leaderboard & Advanced Score Displays ----------
+
+# Leaderboard Command (Kill scores ranked with 🔥)
+@bot.tree.command(name="leaderboard", description="Show ranked Kill Score leaderboard")
+async def leaderboard(interaction: discord.Interaction):
+    kill_scores = scores.get("kill", {})
+    if not kill_scores:
+        await interaction.response.send_message("⚠️ No kill scores available.", ephemeral=True)
+        return
+
+    sorted_scores = sorted(kill_scores.items(), key=lambda x: x[1], reverse=True)
+    msg = "🏆 **Kill Score Leaderboard** 🏆\n"
+    for i, (name, val) in enumerate(sorted_scores, start=1):
+        msg += f"{i}. {name} — {val}🔥\n"
+
+    await interaction.response.send_message(msg)
+
+
+# Line Chart Command
+@bot.tree.command(name="scoreline", description="Show score progression as a line chart")
+@app_commands.choices(category=[
+    app_commands.Choice(name="Kill Score", value="kill"),
+    app_commands.Choice(name="VS Score", value="vs")
+])
+async def scoreline(interaction: discord.Interaction, category: app_commands.Choice[str]):
+    history = scores.get("history", [])
+    if not history:
+        await interaction.response.send_message("⚠️ No score history available.", ephemeral=True)
+        return
+
+    # Filter history by category
+    history = [h for h in history if h["category"] == category.value]
+    if not history:
+        await interaction.response.send_message(f"⚠️ No history for {category.name}.", ephemeral=True)
+        return
+
+    # Build time series for each name
+    import datetime
+    series = {}
+    for h in history:
+        t = datetime.datetime.fromtimestamp(h["timestamp"])
+        series.setdefault(h["name"], []).append((t, h["value"]))
+
+    # Plot
+    fig, ax = plt.subplots()
+    for name, points in series.items():
+        points.sort(key=lambda x: x[0])
+        times, vals = zip(*points)
+        ax.plot(times, vals, marker="o", label=name)
+
+    ax.set_title(f"{category.name} Progression")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Score")
+    ax.legend()
+
+    buf = BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    await interaction.response.send_message(file=discord.File(buf, filename="linechart.png"))
+
+
+# Pie Chart Command
+@bot.tree.command(name="scorepie", description="Show score distribution as a pie chart")
+@app_commands.choices(category=[
+    app_commands.Choice(name="Kill Score", value="kill"),
+    app_commands.Choice(name="VS Score", value="vs")
+])
+async def scorepie(interaction: discord.Interaction, category: app_commands.Choice[str]):
+    data_scores = scores.get(category.value, {})
+    if not data_scores:
+        await interaction.response.send_message(f"⚠️ No data for {category.name}.", ephemeral=True)
+        return
+
+    fig, ax = plt.subplots()
+    ax.pie(data_scores.values(), labels=data_scores.keys(), autopct="%1.1f%%", startangle=90)
+    ax.set_title(f"{category.name} Distribution")
+
+    buf = BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    await interaction.response.send_message(file=discord.File(buf, filename="piechart.png"))
+
+
+# Formatted Text Table Command
+@bot.tree.command(name="scoretable", description="Show scores as a formatted text table")
+@app_commands.choices(category=[
+    app_commands.Choice(name="Kill Score", value="kill"),
+    app_commands.Choice(name="VS Score", value="vs")
+])
+async def scoretable(interaction: discord.Interaction, category: app_commands.Choice[str]):
+    data_scores = scores.get(category.value, {})
+    if not data_scores:
+        await interaction.response.send_message(f"⚠️ No scores in {category.name}.", ephemeral=True)
+        return
+
+    # Sort descending
+    sorted_scores = sorted(data_scores.items(), key=lambda x: x[1], reverse=True)
+
+    # Format table
+    msg = f"📊 **{category.name} Table**\n"
+    msg += "```Rank  Name            Score\n"
+    msg += "----  --------------  -----\n"
+    for i, (name, val) in enumerate(sorted_scores, start=1):
+        msg += f"{i:<4}  {name:<14}  {val}🔥\n"
+    msg += "```"
+
+    await interaction.response.send_message(msg)
+    # ---------- PART 8: Flask Setup & Bot Startup ----------
 
 import threading
 
