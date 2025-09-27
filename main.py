@@ -15,9 +15,8 @@ from googletrans import Translator
 import matplotlib
 import tempfile
 
-# Use headless backend and place cache in temp to avoid permission issues
+# Use headless backend (safe for Render)
 matplotlib.use("Agg")
-matplotlib.rcParams['cache.directory'] = tempfile.gettempdir()
 import matplotlib.pyplot as plt
 from io import BytesIO
 
