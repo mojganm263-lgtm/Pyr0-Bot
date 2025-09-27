@@ -561,9 +561,26 @@ async def scoretable(interaction: discord.Interaction, category: app_commands.Ch
     msg += "```"
 
     await interaction.response.send_message(msg)
+
+
+# View All Commands
+@bot.tree.command(name="viewcommands", description="View all available slash commands")
+async def viewcommands(interaction: discord.Interaction):
+    commands_list = bot.tree.get_commands()
+    msg = "📜 **Available Commands:**\n"
+    for cmd in commands_list:
+        msg += f"- /{cmd.name} — {cmd.description}\n"
+    await interaction.response.send_message(msg, ephemeral=False)
     # ---------- PART 8: Flask Setup & Bot Startup ----------
 
-import threading
+@bot.event
+async def on_ready():
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Synced {len(synced)} commands")
+    except Exception as e:
+        print(f"❌ Sync failed: {e}")
+    print(f"🤖 Logged in as {bot.user}")
 
 if __name__ == "__main__":
     # Start Flask in a separate thread so the bot stays alive on Render
