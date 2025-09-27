@@ -1,5 +1,6 @@
 # ---------- PART 1: Imports, Environment, Flask, JSON, HF Models, Discord Setup ----------
-# Paste this as plain text (no formatting) to avoid hidden characters.
+# Paste as plain text (no formatting) to avoid hidden characters.
+
 import os
 import json
 import threading
@@ -12,7 +13,11 @@ from discord import app_commands
 from langdetect import detect, LangDetectException
 from googletrans import Translator
 import matplotlib
-matplotlib.use("Agg")  # Headless backend
+import tempfile
+
+# Use headless backend and place cache in temp to avoid permission issues
+matplotlib.use("Agg")
+matplotlib.rcParams['cache.directory'] = tempfile.gettempdir()
 import matplotlib.pyplot as plt
 from io import BytesIO
 
@@ -66,7 +71,7 @@ intents.message_content = True
 intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 # ---------- PART 2: Translation Functions and Admin Check ----------
-# Paste this as plain text (no formatting) to avoid hidden characters.
+# Paste as plain text.
 
 def translate(text: str, src: str, tgt: str) -> str:
     """
@@ -101,7 +106,7 @@ def is_admin(interaction: discord.Interaction) -> bool:
     """Check if the user has admin permissions in the guild."""
     return interaction.user.guild_permissions.administrator
     # ---------- PART 3: Channel Commands ----------
-# Paste as plain text to avoid hidden characters
+# Paste as plain text.
 
 @bot.tree.command(name="setchannel", description="Set this channel as a bidirectional translator (Admin only)")
 async def setchannel(interaction: discord.Interaction):
@@ -176,7 +181,7 @@ async def setlanguages(interaction: discord.Interaction, lang1: app_commands.Cho
     save_data(data)
     await interaction.response.send_message(f"✅ Language pair updated: {lang1.name} ↔ {lang2.name}", ephemeral=True)
     # ---------- PART 4: Translation Events ----------
-# Paste as plain text to avoid hidden characters
+# Paste as plain text.
 
 @bot.event
 async def on_message(message):
@@ -262,30 +267,56 @@ async def on_reaction_add(reaction, user):
     except discord.Forbidden:
         pass
         # ---------- PART 5: Scoring Commands (Add/Show/Export/Import/Clear) ----------
-# Paste as plain text to avoid hidden characters
+# Paste as plain text.
 
-@bot.tree.command(name="addscore", description="Add to a player's score (Admin only)")
-@app_commands.describe(category="Choose score type", name="Player name", value="Points to add")
+@bot.tree.command(name="addscore", description="Set or update a player's absolute score (Admin only)")
+@app_commands.describe(category="Choose score type", name="Player name", value="Absolute score value (use integer, commas allowed)")
 @app_commands.choices(category=[
     app_commands.Choice(name="Kill Score", value="kill"),
     app_commands.Choice(name="VS Score", value="vs")
 ])
-async def addscore(interaction, category: app_commands.Choice[str], name: str, value: int):
+async def addscore(interaction, category: app_commands.Choice[str], name: str, value: str):
+    """
+    New behavior:
+    - The 'value' argument is treated as an absolute total (e.g., 1000000).
+    - If equal to the current stored value -> no change.
+    - If greater -> update to new absolute and record history (difference will be seen in compute_diff).
+    - If smaller -> update to new absolute (if you'd rather block decreases change behavior).
+    """
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
 
-    scores.setdefault(category.value, {})[name] = scores.get(category.value, {}).get(name, 0) + value
+    # Normalize user input (allow commas)
+    try:
+        new_val = int(str(value).replace(",", ""))
+    except ValueError:
+        await interaction.response.send_message("⚠️ Please provide a valid integer value (commas allowed).", ephemeral=True)
+        return
+
+    cat_scores = scores.setdefault(category.value, {})
+    old_val = cat_scores.get(name, 0)
+
+    if new_val == old_val:
+        await interaction.response.send_message(f"⚠️ No change for {name}; value remains {old_val:,}.", ephemeral=True)
+        return
+
+    # Update to new absolute value and append history entry (history stores absolute values)
+    cat_scores[name] = new_val
     scores.setdefault("history", []).append({
+        "timestamp": int(interaction.created_at.timestamp()),
         "category": category.value,
         "name": name,
-        "value": scores[category.value][name],
-        "timestamp": int(interaction.created_at.timestamp())
+        "value": new_val
     })
     save_data(data)
+
+    # Report how much changed (positive or negative)
+    diff = new_val - old_val
+    sign = "+" if diff >= 0 else "-"
     await interaction.response.send_message(
-        f"✅ Added {value} points to **{name}** in {category.name}. "
-        f"New total: {scores[category.value][name]:,}"
+        f"✅ {name} updated in {category.name}: {old_val:,} → {new_val:,} ({sign}{abs(diff):,}).",
+        ephemeral=True
     )
 
 
@@ -335,7 +366,11 @@ async def importcsv(interaction, attachment: discord.Attachment):
     for row in reader:
         cat = row["Category"]
         name = row["Name"]
-        val = int(row["Score"].replace(',', ''))
+        try:
+            val = int(row["Score"].replace(',', ''))
+        except Exception:
+            await interaction.response.send_message(f"⚠️ Invalid number in CSV for {name}. Skipping.", ephemeral=True)
+            continue
         scores.setdefault(cat, {})[name] = val
 
     save_data(data)
@@ -354,7 +389,7 @@ async def clearscores(interaction):
     save_data(data)
     await interaction.response.send_message("✅ All scores cleared.")
     # ---------- PART 6: Helper Functions for Display ----------
-# Paste as plain text to avoid hidden characters
+# Paste as plain text.
 
 async def send_long_message(interaction, header, lines, ephemeral=False):
     """
@@ -363,36 +398,57 @@ async def send_long_message(interaction, header, lines, ephemeral=False):
     - lines: list of strings (each line is one name/score entry)
     - ephemeral: whether message should be visible only to the user
     """
-    chunk_size = 20  # number of lines per message
-    for i in range(0, len(lines), chunk_size):
-        chunk = lines[i:i + chunk_size]
+    # We'll aim to keep each message below ~1800 chars to be safe.
+    max_chars = 1800
+    chunk = []
+    current_len = len(header) + 2  # header + newline
+    for line in lines:
+        if current_len + len(line) + 1 > max_chars and chunk:
+            msg = header + "\n" + "\n".join(chunk)
+            if not hasattr(interaction, "followup_sent") or not interaction.followup_sent:
+                await interaction.response.send_message(msg, ephemeral=ephemeral)
+                interaction.followup_sent = True
+            else:
+                await interaction.followup.send(msg, ephemeral=ephemeral)
+            chunk = []
+            current_len = len(header) + 2
+        chunk.append(line)
+        current_len += len(line) + 1
+
+    # send remaining
+    if chunk:
         msg = header + "\n" + "\n".join(chunk)
-        if i == 0:
+        if not hasattr(interaction, "followup_sent") or not interaction.followup_sent:
             await interaction.response.send_message(msg, ephemeral=ephemeral)
+            interaction.followup_sent = True
         else:
             await interaction.followup.send(msg, ephemeral=ephemeral)
 
 
 def compute_diff(category_value):
     """
-    Compute the difference between the current score and the previous score
-    for each name in the given category.
-    Returns a dict: {name: diff_value}
+    Compute per-entry differences using history.
+    Returns a dict mapping name -> total_diff_since_start (sum of per-entry diffs).
+    But for display of per-last-update diffs (like showscores diff mode), we return the last diff per name.
     """
-    diff_data = {}
     last_values = {}
+    diffs = {}
     for entry in scores.get("history", []):
-        if entry["category"] == category_value:
-            diff_data[entry["name"]] = entry["value"] - last_values.get(entry["name"], 0)
-            last_values[entry["name"]] = entry["value"]
-    return diff_data
+        if entry["category"] != category_value:
+            continue
+        name = entry["name"]
+        val = entry["value"]
+        diff = val - last_values.get(name, 0)
+        diffs[name] = diffs.get(name, 0) + diff
+        last_values[name] = val
+    return diffs
 
 
 async def generate_score_lines(category_value, show_diff=False):
     """
     Generate formatted lines for table display.
     - category_value: 'kill' or 'vs'
-    - show_diff: if True, show difference instead of raw score
+    - show_diff: if True, show per-name cumulative diff (from history)
     """
     if show_diff:
         data_to_show = compute_diff(category_value)
@@ -402,11 +458,13 @@ async def generate_score_lines(category_value, show_diff=False):
     sorted_scores = sorted(data_to_show.items(), key=lambda x: x[1], reverse=True)
     lines = []
     for i, (name, val) in enumerate(sorted_scores, start=1):
-        suffix = "" if show_diff else "🔥"  # emoji only for raw score
-        lines.append(f"{i:<4}  {name:<14}  {val:,}{suffix}")
+        if show_diff:
+            lines.append(f"{i:<4}  {name:<20}  {val:,}")
+        else:
+            lines.append(f"{i:<4}  {name:<20}  {val:,} 🔥")
     return lines
     # ---------- PART 7: Table / Leaderboard / List Display Commands ----------
-# Paste as plain text to avoid hidden characters
+# Paste as plain text.
 
 @bot.tree.command(name="scoretable", description="Show scores as a formatted text table")
 @app_commands.choices(category=[
@@ -434,7 +492,7 @@ async def leaderboard(interaction):
         return
 
     sorted_scores = sorted(kill_scores.items(), key=lambda x: x[1], reverse=True)
-    lines = [f"{i}. {name} — {val:,}🔥" for i, (name, val) in enumerate(sorted_scores, start=1)]
+    lines = [f"{i}. {name} — {val:,} 🔥" for i, (name, val) in enumerate(sorted_scores, start=1)]
     await send_long_message(interaction, "🏆 **Kill Score Leaderboard** 🏆", lines)
 
 
@@ -452,7 +510,7 @@ async def listnames(interaction, category: app_commands.Choice[str]):
     lines = list(data_scores.keys())
     await send_long_message(interaction, f"📋 **Names in {category.name}:**", lines, ephemeral=True)
     # ---------- PART 8: Graph Commands (Line & Pie Charts) ----------
-# Paste as plain text to avoid hidden characters
+# Paste as plain text.
 
 @bot.tree.command(name="scoreline", description="Show score progression as a line chart")
 @app_commands.choices(category=[
@@ -471,11 +529,11 @@ async def scoreline(interaction, category: app_commands.Choice[str]):
         t = datetime.datetime.fromtimestamp(h["timestamp"])
         series.setdefault(h["name"], []).append((t, h["value"]))
 
-    # Limit legend to top 20 names
-    sorted_names = sorted(series.keys())[:20]
-    fig, ax = plt.subplots(figsize=(max(8, len(sorted_names)*0.5), 6))
+    # Limit to top N names for readability
+    names = sorted(series.keys())[:20]
+    fig, ax = plt.subplots(figsize=(max(8, len(names) * 0.5), 6))
 
-    for name in sorted_names:
+    for name in names:
         points = series[name]
         points.sort(key=lambda x: x[0])
         times, vals = zip(*points)
@@ -506,7 +564,6 @@ async def scorepie(interaction, category: app_commands.Choice[str]):
         await interaction.response.send_message(f"⚠️ No data for {category.name}.", ephemeral=True)
         return
 
-    # Top 10 names; rest grouped as "Other"
     sorted_scores = sorted(data_scores.items(), key=lambda x: x[1], reverse=True)
     top_n = 10
     top_scores = sorted_scores[:top_n]
@@ -514,7 +571,6 @@ async def scorepie(interaction, category: app_commands.Choice[str]):
 
     labels = [name for name, _ in top_scores]
     values = [val for _, val in top_scores]
-
     if others:
         labels.append("Other")
         values.append(sum(val for _, val in others))
@@ -528,8 +584,41 @@ async def scorepie(interaction, category: app_commands.Choice[str]):
     plt.savefig(buf, format="png")
     buf.seek(0)
     await interaction.response.send_message(file=discord.File(buf, filename="piechart.png"))
-    # ---------- PART 9: Bot Startup & Flask Integration ----------
-# Paste as plain text to avoid hidden characters
+    # ---------- PART 9: /allcommands and Bot Startup & Flask Integration ----------
+# Paste as plain text.
+
+@bot.tree.command(name="allcommands", description="List all slash commands added by this bot")
+async def allcommands(interaction: discord.Interaction):
+    """
+    Lists the slash commands defined in this main.py (only those added here),
+    marking Admin-only commands.
+    """
+    # Manual registry of commands defined above with descriptions and admin flags
+    registry = [
+        ("setchannel", "Set this channel as a bidirectional translator (Admin only)", True),
+        ("removechannel", "Remove this channel from translator mode (Admin only)", True),
+        ("listchannels", "List all configured translator channels", False),
+        ("setlanguages", "Set language pair (Admin only)", True),
+        ("addscore", "Set or update a player's absolute score (Admin only)", True),
+        ("showscore", "Show a player's score", False),
+        ("exportcsv", "Export scores to CSV file", False),
+        ("importcsv", "Import scores from CSV (Admin only)", True),
+        ("clearscores", "Clear all scores (Admin only)", True),
+        ("scoretable", "Show scores as a formatted text table", False),
+        ("leaderboard", "Show Kill Score leaderboard", False),
+        ("listnames", "List all names in a score category", False),
+        ("scoreline", "Show score progression as a line chart", False),
+        ("scorepie", "Show score distribution as a pie chart", False),
+        ("allcommands", "List all slash commands added by this bot", False)
+    ]
+
+    lines = []
+    for name, desc, admin in registry:
+        adm = " (Admin)" if admin else ""
+        lines.append(f"/{name}{adm} — {desc}")
+
+    await send_long_message(interaction, "🤖 **Available Slash Commands**", lines, ephemeral=True)
+
 
 @bot.event
 async def on_ready():
@@ -546,5 +635,9 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Start the Discord bot
-    bot.run(TOKEN)
+    # Start the Discord bot, and print errors if it fails
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        print("❌ Bot failed to start:", e)
+        raise
