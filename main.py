@@ -24,7 +24,7 @@ from googletrans import Translator
 
 import matplotlib
 
-matplotlib.use("Agg")  # Headless backend
+matplotlib.use("Agg")  # Headless backend
 
 import matplotlib.pyplot as plt
 
@@ -435,19 +435,23 @@ async def on_reaction_add(reaction, user):
         pass
         # ---------- PART 5: Scoring Commands (Add/Show/Export/Import/Clear) ----------
 
-@bot.tree.command(name="addscore", description="Add to a player's score")
+@bot.tree.command(name="addscore", description="Add to a player's score (Admin only)")
 @app_commands.describe(category="Choose score type", name="Player name", value="Points to add")
 @app_commands.choices(category=[
     app_commands.Choice(name="Kill Score", value="kill"),
     app_commands.Choice(name="VS Score", value="vs")
 ])
 async def addscore(interaction, category: app_commands.Choice[str], name: str, value: int):
-    scores[category.value][name] = scores[category.value].get(name, 0) + value
-    scores["history"].append({
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+
+    scores.setdefault(category.value, {})[name] = scores.get(category.value, {}).get(name, 0) + value
+    scores.setdefault("history", []).append({
         "category": category.value,
         "name": name,
         "value": scores[category.value][name],
-        "timestamp": interaction.created_at.timestamp()
+        "timestamp": int(interaction.created_at.timestamp())
     })
     save_data(data)
     await interaction.response.send_message(
@@ -463,7 +467,7 @@ async def addscore(interaction, category: app_commands.Choice[str], name: str, v
     app_commands.Choice(name="VS Score", value="vs")
 ])
 async def showscore(interaction, category: app_commands.Choice[str], name: str):
-    val = scores[category.value].get(name)
+    val = scores.get(category.value, {}).get(name)
     if val is None:
         await interaction.response.send_message(f"⚠️ {name} not found in {category.name}.", ephemeral=True)
     else:
@@ -502,7 +506,7 @@ async def importcsv(interaction, attachment: discord.Attachment):
     for row in reader:
         cat = row["Category"]
         name = row["Name"]
-        val = int(row["Score"])
+        val = int(row["Score"].replace(',', ''))
         scores.setdefault(cat, {})[name] = val
 
     save_data(data)
@@ -524,7 +528,7 @@ async def clearscores(interaction):
 
 async def send_long_message(interaction, header, lines, ephemeral=False):
     """
-    Send a long message in chunks to avoid Discord 2000-char limit.
+    Send a long message in chunks to avoid Discord 2000-character limit.
     - header: string to appear at the top of each chunk
     - lines: list of strings (each line is one name/score entry)
     - ephemeral: whether message should be visible only to the user
