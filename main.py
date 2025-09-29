@@ -1,23 +1,25 @@
+# ---------- FILE: main.py ----------
 import os
 import threading
-import logging
 from flask import Flask
 import discord
 from discord.ext import commands
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("discordbot")
+from config import TOKEN
+from database import Base, engine
+from cogs import translation, scoring, export_import, utilities
 
-TOKEN = os.getenv("TOKEN")
-
+# ---------- Flask Setup ----------
 app = Flask(__name__)
+
 @app.route("/")
 def home():
     return "Bot is alive!"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000)
 
+# ---------- Discord Bot Setup ----------
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -25,37 +27,30 @@ intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-try:
-    from database import init_db, SessionLocal
-    import commands as command_module
-    import utils
-except Exception as e:
-    logger.exception("Failed to import modules: %s", e)
-    raise
+# ---------- Load Cogs ----------
+bot.add_cog(translation.TranslationCog(bot))
+bot.add_cog(scoring.ScoringCog(bot))
+bot.add_cog(export_import.ExportImportCog(bot))
+bot.add_cog(utilities.UtilitiesCog(bot))
 
-init_db()
-
-# Register all commands
-command_module.setup(bot, SessionLocal)
-
-# Translator commands
-command_module.setup_translator(bot.tree)
-
+# ---------- Events ----------
 @bot.event
 async def on_ready():
     try:
         synced = await bot.tree.sync()
-        logger.info("Synced %d commands", len(synced))
+        print(f"✅ Synced {len(synced)} commands")
     except Exception as e:
-        logger.exception("Command sync failed: %s", e)
-    logger.info("Bot logged in as %s (ID: %s)", bot.user, bot.user.id)
+        print(f"❌ Sync failed: {e}")
+    print(f"🤖 Logged in as {bot.user}")
 
+# ---------- Main ----------
 if __name__ == "__main__":
+    # Create tables if they don't exist
+    Base.metadata.create_all(engine)
+
+    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info("Flask server started")
 
-    if not TOKEN:
-        logger.error("TOKEN not set. Exiting.")
-        raise SystemExit("TOKEN not set.")
+    # Start Discord bot
     bot.run(TOKEN)
