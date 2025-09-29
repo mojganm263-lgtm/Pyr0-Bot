@@ -1,6 +1,4 @@
-# ---------- database.py — PART 2: database setup ----------
-# Handles SQLAlchemy engine, session factory, and initialization
-
+# ---------- database.py: SQLAlchemy engine & session factory ----------
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -22,6 +20,5 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     """Initialize the database and create tables if missing"""
-    # Import models here to register them with Base before create_all
-    import models
+    import models  # Import models to register them with Base
     Base.metadata.create_all(bind=engine)
