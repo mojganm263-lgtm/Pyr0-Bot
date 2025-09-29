@@ -46,9 +46,6 @@ except Exception as e:
 # Initialize DB
 init_db()
 
-# Provide session factory
-utils.set_session_factory(SessionLocal)
-
 # Register commands
 try:
     command_module.setup(bot, SessionLocal)
