@@ -1,4 +1,3 @@
-# ---------- utils.py: helpers & DB session ----------
 import logging
 import discord
 from discord import Interaction
@@ -14,17 +13,15 @@ from models import Score
 SessionLocal = sessionmaker(bind=engine)
 
 def get_session():
-    """Create a new DB session."""
     return SessionLocal()
 
 # ----------------- Translation helpers -----------------
 HF_URL = "https://api-inference.huggingface.co/models/Helsinki-NLP/opus-mt-en-ROMANCE"
-HF_HEADERS = {"Authorization": f"Bearer {None}"}  # Add HF token if available
+HF_HEADERS = {"Authorization": f"Bearer {None}"}  # Add token if available
 
 google_translator = GoogleTranslator()
 
 def translate_text(text: str, target_lang: str = "en") -> str:
-    """Translate text using HuggingFace first, fallback to Google Translate."""
     try:
         payload = {"inputs": text}
         resp = requests.post(HF_URL, headers=HF_HEADERS, json=payload, timeout=10)
@@ -44,11 +41,9 @@ def translate_text(text: str, target_lang: str = "en") -> str:
 
 # ----------------- Message helpers -----------------
 async def send_long_message(interaction: Interaction, content: str, chunk_size: int = 1800):
-    """Send long messages in chunks to Discord."""
     if not content:
         await interaction.response.send_message("No content to display.")
         return
-
     chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
     first = True
     for chunk in chunks:
@@ -67,7 +62,6 @@ def compute_diff(old_value: float, new_value: float) -> float:
 
 # ----------------- Autocomplete helpers -----------------
 async def name_autocomplete(interaction: Interaction, current: str):
-    """Suggest names from DB that match current input."""
     session = get_session()
     try:
         query = session.query(Score.name).distinct()
