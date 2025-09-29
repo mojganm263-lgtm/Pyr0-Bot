@@ -1,8 +1,7 @@
-# ---------- models.py: SQLAlchemy ORM models ----------
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
-from database import Base  # Base from database.py
+from database import Base
 
 class Score(Base):
     __tablename__ = "scores"
@@ -13,7 +12,6 @@ class Score(Base):
     value = Column(Float, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-    # Relationship to history
     history = relationship("History", back_populates="score", cascade="all, delete-orphan")
 
 class History(Base):
