@@ -1,6 +1,4 @@
-# ---------- main.py — PART 1: bootstrap, Flask, bot startup ----------
-# Copy this file first. It expects database.py, models.py, utils.py, commands.py in the same folder.
-
+# ---------- main.py ----------
 import os
 import threading
 import logging
@@ -26,7 +24,6 @@ def home():
     return "Bot is alive!"
 
 def run_flask():
-    # Bind to all interfaces for hosting (Render, etc.)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
 
 # Discord intents and bot
@@ -37,26 +34,22 @@ intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Import local modules (they will be provided in following parts)
-# These imports are placed after bot creation to avoid circular import issues in some environments.
+# Import local modules
 try:
     from database import init_db, SessionLocal
-    import commands as command_module   # module with slash command registration
+    import commands as command_module
     import utils
 except Exception as e:
     logger.exception("Failed to import project modules: %s", e)
     raise
 
-# Initialize DB (creates tables if missing)
+# Initialize DB
 init_db()
 
-# Provide session factory on utils/commands modules (they can call SessionLocal())
-# If you prefer a single global session, modules should call SessionLocal() themselves.
-# Here we do not create a long-lived session to avoid cross-thread issues; commands use short sessions.
+# Provide session factory
 utils.set_session_factory(SessionLocal)
 
-# Register events / commands
-# The commands.py module will expose a setup(bot) function that registers slash commands and handlers.
+# Register commands
 try:
     command_module.setup(bot, SessionLocal)
 except Exception as e:
@@ -73,7 +66,7 @@ async def on_ready():
     logger.info("Bot logged in as %s (ID: %s)", bot.user, bot.user.id)
 
 if __name__ == "__main__":
-    # Start Flask in a separate thread so this process stays alive on hosting platforms
+    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info("Flask health server started")
