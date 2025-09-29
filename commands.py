@@ -494,7 +494,8 @@ def setup_import_export(tree, SessionLocal):
             session.close()
           # ---------- utils.py — PART 5G: error handling & helpers ----------
 from sqlalchemy.orm import sessionmaker
-from database import engine, Score
+from database import engine, SessionLocal    # engine and session factory
+from models import Score                       # import your DB model from models.py
 from datetime import datetime
 
 SessionLocal = sessionmaker(bind=engine)
