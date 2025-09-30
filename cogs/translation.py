@@ -6,7 +6,9 @@ from discord import app_commands
 from langdetect import detect, LangDetectException
 from googletrans import Translator
 from database import SessionLocal, Channel
-from config import HF_MODELS, HF_KEY, DEFAULT_LANG_PAIR, DEFAULT_FLAGS
+from config import HF_MODELS, HF_KEY, DEFAULT_FLAGS
+
+import discord
 
 HF_HEADERS = {"Authorization": f"Bearer {HF_KEY}"} if HF_KEY else {}
 translator = Translator()
@@ -15,9 +17,8 @@ class TranslationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ---------- Helper Functions ----------
+    # ---------- Helper ----------
     def translate_text(self, text: str, src: str, tgt: str) -> str:
-        # Try Hugging Face first
         model_name = HF_MODELS.get((src, tgt))
         if model_name:
             try:
@@ -34,8 +35,6 @@ class TranslationCog(commands.Cog):
                 return f"HF Translation failed ({response.status_code})"
             except requests.exceptions.RequestException as e:
                 return f"HF request failed: {e}"
-
-        # Fallback to Google Translate
         try:
             translated = translator.translate(text, src=src, dest=tgt)
             return translated.text
@@ -47,12 +46,23 @@ class TranslationCog(commands.Cog):
         return interaction.user.guild_permissions.administrator
 
     # ---------- Commands ----------
-    @app_commands.command(name="setchannel", description="Set this channel as translator (Admin only)")
-    async def setchannel(self, interaction):
+    @app_commands.command(name="setchannel", description="Set this channel as translator with chosen languages (Admin only)")
+    @app_commands.choices(lang1=[
+        app_commands.Choice(name="English", value="en"),
+        app_commands.Choice(name="Portuguese", value="pt"),
+        app_commands.Choice(name="Ukrainian", value="uk"),
+        app_commands.Choice(name="Korean", value="ko")
+    ])
+    @app_commands.choices(lang2=[
+        app_commands.Choice(name="English", value="en"),
+        app_commands.Choice(name="Portuguese", value="pt"),
+        app_commands.Choice(name="Ukrainian", value="uk"),
+        app_commands.Choice(name="Korean", value="ko")
+    ])
+    async def setchannel(self, interaction, lang1: app_commands.Choice[str], lang2: app_commands.Choice[str]):
         if not await self.is_admin(interaction):
             await interaction.response.send_message("❌ Admins only.", ephemeral=True)
             return
-
         session = SessionLocal()
         try:
             cid = str(interaction.channel.id)
@@ -60,19 +70,21 @@ class TranslationCog(commands.Cog):
             if existing:
                 await interaction.response.send_message("⚠️ Channel already configured.", ephemeral=True)
                 return
-
+            flags = []
+            for lang in (lang1.value, lang2.value):
+                if lang == "en": flags.append("🇺🇸")
+                elif lang == "pt": flags.append("🇵🇹")
+                elif lang == "uk": flags.append("🇺🇦")
+                elif lang == "ko": flags.append("🇰🇷")
             channel_obj = Channel(
                 channel_id=cid,
-                lang1=DEFAULT_LANG_PAIR[0],
-                lang2=DEFAULT_LANG_PAIR[1],
-                flags=json.dumps(DEFAULT_FLAGS)
+                lang1=lang1.value,
+                lang2=lang2.value,
+                flags=json.dumps(flags)
             )
             session.add(channel_obj)
             session.commit()
-            await interaction.response.send_message(
-                f"✅ Channel set as translator: {DEFAULT_LANG_PAIR[0]} ↔ {DEFAULT_LANG_PAIR[1]}",
-                ephemeral=True
-            )
+            await interaction.response.send_message(f"✅ Channel set as translator: {lang1.value} ↔ {lang2.value}", ephemeral=True)
         finally:
             session.close()
 
@@ -81,15 +93,14 @@ class TranslationCog(commands.Cog):
         if not await self.is_admin(interaction):
             await interaction.response.send_message("❌ Admins only.", ephemeral=True)
             return
-
         session = SessionLocal()
         try:
             cid = str(interaction.channel.id)
-            channel_obj = session.query(Channel).filter_by(channel_id=cid).first()
-            if not channel_obj:
+            ch = session.query(Channel).filter_by(channel_id=cid).first()
+            if not ch:
                 await interaction.response.send_message("⚠️ Channel not configured.", ephemeral=True)
                 return
-            session.delete(channel_obj)
+            session.delete(ch)
             session.commit()
             await interaction.response.send_message("✅ Channel removed from translator mode.", ephemeral=True)
         finally:
@@ -103,44 +114,33 @@ class TranslationCog(commands.Cog):
             if not channels:
                 await interaction.response.send_message("⚠️ No channels configured.", ephemeral=True)
                 return
-            msg = "📚 **Translator Channels:**\n"
-            for ch in channels:
-                msg += f"- <#{ch.channel_id}>: {ch.lang1} ↔ {ch.lang2}\n"
-            await interaction.response.send_message(msg)
+            table = "Channel | Lang1 | Lang2 | Flags\n"
+            table += "\n".join([f"<#{ch.channel_id}> | {ch.lang1} | {ch.lang2} | {', '.join(json.loads(ch.flags))}" for ch in channels])
+            embed = discord.Embed(title="Translator Channels", description=f"```{table}```", color=0x00ff00)
+            await interaction.response.send_message(embed=embed)
         finally:
             session.close()
 
-    # ---------- Events ----------
+    # ---------- Event ----------
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
             return
-
         session = SessionLocal()
         try:
             cid = str(message.channel.id)
-            channel_obj = session.query(Channel).filter_by(channel_id=cid).first()
-            if not channel_obj:
-                return
-
+            ch = session.query(Channel).filter_by(channel_id=cid).first()
+            if not ch: return
             text = message.content.strip()
-            if not text:
-                return
-
-            lang1 = channel_obj.lang1
-            lang2 = channel_obj.lang2
-
-            # Detect language safely
+            if not text: return
             try:
                 detected = detect(text)
-                if detected not in (lang1, lang2):
-                    detected = lang1
-            except LangDetectException:
-                detected = lang1
-
-            src, tgt = (lang1, lang2) if detected == lang1 else (lang2, lang1)
+                if detected not in (ch.lang1, ch.lang2):
+                    detected = ch.lang1
+            except:
+                detected = ch.lang1
+            src, tgt = (ch.lang1, ch.lang2) if detected == ch.lang1 else (ch.lang2, ch.lang1)
             translated = self.translate_text(text, src, tgt)
-
             try:
                 await message.reply(f"🌐 Translation ({src} → {tgt}):\n{translated}")
             except discord.Forbidden:
