@@ -47,12 +47,9 @@ async def on_ready():
 
 # ---------- Main ----------
 if __name__ == "__main__":
-    # Create tables if they don't exist
     Base.metadata.create_all(engine)
 
-    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Start Discord bot
     bot.run(TOKEN)
