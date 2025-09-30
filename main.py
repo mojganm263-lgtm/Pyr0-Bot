@@ -28,15 +28,17 @@ intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---------- Load Cogs ----------
-bot.add_cog(translation.TranslationCog(bot))
-bot.add_cog(scoring.ScoringCog(bot))
-bot.add_cog(export_import.ExportImportCog(bot))
-bot.add_cog(utilities.UtilitiesCog(bot))
+async def load_cogs():
+    await bot.add_cog(translation.TranslationCog(bot))
+    await bot.add_cog(scoring.ScoringCog(bot))
+    await bot.add_cog(export_import.ExportImportCog(bot))
+    await bot.add_cog(utilities.UtilitiesCog(bot))
 
 # ---------- Events ----------
 @bot.event
 async def on_ready():
     try:
+        await load_cogs()
         synced = await bot.tree.sync()
         print(f"✅ Synced {len(synced)} commands")
     except Exception as e:
