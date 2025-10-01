@@ -17,9 +17,44 @@ sns.set_theme()
 class ScoringCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.bot = bot
 
     async def is_admin(self, interaction):
         return interaction.user.guild_permissions.administrator
+
+    # ---------- Helper function for score rule ----------
+    def update_score(self, session, name_obj: Name, new_val: int, category: str):
+        """
+        Updates the score following your rule:
+        - First score is permanent.
+        - Later scores: only add positive difference.
+        - Ignore subtractions.
+        """
+        if category == "kill":
+            current = name_obj.kill_score
+        else:
+            current = name_obj.vs_score
+
+        if current is None or current == 0:  # First score
+            diff = new_val
+            if category == "kill":
+                name_obj.kill_score = new_val
+            else:
+                name_obj.vs_score = new_val
+            session.add(ScoreHistory(name=name_obj, category=category, value=new_val))
+            return diff, True
+
+        elif new_val > current:  # Only positive difference
+            diff = new_val - current
+            if category == "kill":
+                name_obj.kill_score = new_val
+            else:
+                name_obj.vs_score = new_val
+            session.add(ScoreHistory(name=name_obj, category=category, value=new_val))
+            return diff, True
+
+        else:  # Ignore subtraction
+            return 0, False
 
     # ---------- Add/Update Score ----------
     @app_commands.command(name="addscore", description="Add or update a score for a name (Admin only)")
@@ -38,17 +73,22 @@ class ScoringCog(commands.Cog):
             if not obj:
                 obj = Name(name=name)
                 session.add(obj)
-            prev_val = obj.kill_score if category.value=="kill" else obj.vs_score
-            if category.value=="kill":
-                obj.kill_score = value
-            else:
-                obj.vs_score = value
-            hist = ScoreHistory(name=obj, category=category.value, value=value)
-            session.add(hist)
+                session.commit()
+                session.refresh(obj)
+
+            diff, updated = self.update_score(session, obj, value, category.value)
             session.commit()
-            emoji = "🔥" if category.value=="kill" else "🛠"
-            diff = value - prev_val if prev_val is not None else value
-            await interaction.response.send_message(f"✅ {category.name} updated: {name} = {value:,} ({diff:+,}) {emoji}", ephemeral=True)
+            if updated:
+                emoji = "🔥" if category.value=="kill" else "🛠"
+                await interaction.response.send_message(
+                    f"✅ {category.name} updated: {name} = {value:,} (+{diff:,}) {emoji}",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"⚠️ Ignored update: {name} already has a higher or equal score ({obj.kill_score if category.value=='kill' else obj.vs_score})",
+                    ephemeral=True
+                )
         finally:
             session.close()
 
@@ -105,6 +145,7 @@ class ScoringCog(commands.Cog):
                 embed = discord.Embed(title=f"{category.name} Table", description=f"```{table_str}```", color=0x00ffcc)
                 await interaction.response.send_message(embed=embed)
             else:
+                import matplotlib.pyplot as plt
                 fig, ax = plt.subplots()
                 ax.bar(sorted_data.keys(), sorted_data.values(), color='skyblue')
                 ax.set_ylabel("Score")
@@ -144,3 +185,6 @@ class ScoringCog(commands.Cog):
             await interaction.response.send_message(embed=embed)
         finally:
             session.close()
+
+async def setup(bot):
+    await bot.add_cog(ScoringCog(bot))
