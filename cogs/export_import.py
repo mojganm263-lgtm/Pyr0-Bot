@@ -2,11 +2,12 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from database import SessionLocal, Name
+from database import SessionLocal, Name, ScoreHistory
 import csv
 import pandas as pd
 from io import BytesIO
 from cogs.utilities import split_long_message
+
 
 class ExportImportCog(commands.Cog):
     def __init__(self, bot):
@@ -46,7 +47,9 @@ class ExportImportCog(commands.Cog):
             file_bytes = await attachment.read()
             lines = file_bytes.decode("utf-8").splitlines()
             reader = csv.reader(lines)
-            next(reader, None)
+            next(reader, None)  # Skip header
+            updated, ignored = 0, 0
+
             for row in reader:
                 if len(row) == 2:
                     name, val = row
@@ -54,13 +57,27 @@ class ExportImportCog(commands.Cog):
                     name_obj = session.query(Name).filter_by(name=name).first()
                     if not name_obj:
                         name_obj = Name(name=name)
+                        if category.lower() == "kill":
+                            name_obj.kill_score = val
+                        else:
+                            name_obj.vs_score = val
                         session.add(name_obj)
-                    if category.lower() == "kill":
-                        name_obj.kill_score = val
+                        updated += 1
                     else:
-                        name_obj.vs_score = val
+                        prev_val = name_obj.kill_score if category.lower() == "kill" else name_obj.vs_score
+                        if val > prev_val:
+                            if category.lower() == "kill":
+                                name_obj.kill_score = val
+                            else:
+                                name_obj.vs_score = val
+                            updated += 1
+                        else:
+                            ignored += 1
+
             session.commit()
-            await interaction.response.send_message(f"✅ Imported scores into {category}.", ephemeral=True)
+            await interaction.response.send_message(
+                f"✅ Imported into {category}. Updated: {updated}, Ignored: {ignored}", ephemeral=True
+            )
         finally:
             session.close()
 
@@ -98,18 +115,38 @@ class ExportImportCog(commands.Cog):
         try:
             file_bytes = await attachment.read()
             df = pd.read_excel(BytesIO(file_bytes))
+            updated, ignored = 0, 0
+
             for _, row in df.iterrows():
                 name = str(row["Name"])
                 val = int(row["Score"])
                 name_obj = session.query(Name).filter_by(name=name).first()
                 if not name_obj:
                     name_obj = Name(name=name)
+                    if category.lower() == "kill":
+                        name_obj.kill_score = val
+                    else:
+                        name_obj.vs_score = val
                     session.add(name_obj)
-                if category.lower() == "kill":
-                    name_obj.kill_score = val
+                    updated += 1
                 else:
-                    name_obj.vs_score = val
+                    prev_val = name_obj.kill_score if category.lower() == "kill" else name_obj.vs_score
+                    if val > prev_val:
+                        if category.lower() == "kill":
+                            name_obj.kill_score = val
+                        else:
+                            name_obj.vs_score = val
+                        updated += 1
+                    else:
+                        ignored += 1
+
             session.commit()
-            await interaction.response.send_message(f"✅ Imported scores into {category}.", ephemeral=True)
+            await interaction.response.send_message(
+                f"✅ Imported into {category}. Updated: {updated}, Ignored: {ignored}", ephemeral=True
+            )
         finally:
             session.close()
+
+
+async def setup(bot):
+    await bot.add_cog(ExportImportCog(bot))
