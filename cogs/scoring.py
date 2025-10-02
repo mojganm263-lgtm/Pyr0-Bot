@@ -46,7 +46,8 @@ class ScoringCog(commands.Cog):
             return new_val, diff, True
 
         return current, 0, False
-        # ---------- Add/Update Score ----------
+
+    # ---------- Add/Update Score ----------
     @app_commands.command(name="addscore", description="Add or update a score for a name (Admin only)")
     @app_commands.describe(category="Choose score type", name="Name to track", value="Value to add/update", showdiff="Show difference?")
     @app_commands.choices(category=[
@@ -85,16 +86,18 @@ class ScoringCog(commands.Cog):
                 await interaction.response.send_message(f"⚠️ Ignored update: {name} already has a higher or equal score ({current:,}).", ephemeral=True)
         finally:
             session.close()
-            # ---------- Show Scores ----------
-    @app_commands.command(name="showscores", description="Show scores as table or graph")
-    @app_commands.describe(category="Choose score type", mode="Display as table or graph", showdiff="Show difference?")
+
+    # ---------- Show Scores ----------
+    @app_commands.command(name="showscores", description="Show scores as table, bar chart, or pie chart")
+    @app_commands.describe(category="Choose score type", mode="Display as table, bar, or pie chart", showdiff="Show difference?")
     @app_commands.choices(category=[
         app_commands.Choice(name="Kill Score", value="kill"),
         app_commands.Choice(name="VS Score", value="vs")
     ])
     @app_commands.choices(mode=[
         app_commands.Choice(name="Table", value="table"),
-        app_commands.Choice(name="Graph", value="graph")
+        app_commands.Choice(name="Bar Chart", value="bar"),
+        app_commands.Choice(name="Pie Chart", value="pie")
     ])
     @app_commands.choices(showdiff=[
         app_commands.Choice(name="Yes", value="yes"),
@@ -111,8 +114,9 @@ class ScoringCog(commands.Cog):
             data = {}
             for n in names:
                 val = n.kill_score if category.value == "kill" else n.vs_score
-                data[n.name] = val
-            sorted_data = dict(sorted(data.items(), key=lambda x: x[1] if x[1] is not None else 0, reverse=True))
+                data[n.name] = val if val is not None else 0
+
+            sorted_data = dict(sorted(data.items(), key=lambda x: x[1], reverse=True))
             emoji = "🔥" if category.value == "kill" else "🛠"
 
             if mode.value == "table":
@@ -131,21 +135,34 @@ class ScoringCog(commands.Cog):
                 table_str = "\n".join(table_lines)
                 embed = discord.Embed(title=f"{category.name} Table", description=f"```\n{table_str}\n```", color=0x8B0000)
                 await interaction.response.send_message(embed=embed)
-            else:
-                # Graph logic unchanged
+
+            elif mode.value == "bar":
                 fig, ax = plt.subplots()
                 ax.bar(sorted_data.keys(), sorted_data.values())
                 ax.set_ylabel("Score")
                 ax.set_title(f"{category.name}")
                 plt.xticks(rotation=45, ha="right")
+
                 buf = BytesIO()
                 plt.tight_layout()
                 plt.savefig(buf, format="png")
                 buf.seek(0)
-                await interaction.response.send_message(file=discord.File(buf, filename="graph.png"))
+                await interaction.response.send_message(file=discord.File(buf, filename="barchart.png"))
+
+            elif mode.value == "pie":
+                fig, ax = plt.subplots()
+                ax.pie(sorted_data.values(), labels=sorted_data.keys(), autopct="%1.1f%%", startangle=90)
+                ax.set_title(f"{category.name} (Pie Chart)")
+
+                buf = BytesIO()
+                plt.tight_layout()
+                plt.savefig(buf, format="png")
+                buf.seek(0)
+                await interaction.response.send_message(file=discord.File(buf, filename="piechart.png"))
+
         finally:
             session.close()
-            # ---------- FILE: cogs/scoring.py (continued: removename) ----------
+
     # ---------- Remove Name ----------
     @app_commands.command(name="removename", description="Remove a tracked name (Admin only)")
     async def removename(self, interaction, name: str):
