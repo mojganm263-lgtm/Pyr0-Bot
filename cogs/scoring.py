@@ -20,7 +20,8 @@ class ScoringCog(commands.Cog):
 
     async def is_admin(self, interaction):
         return interaction.user.guild_permissions.administrator
-        # ---------- Helper function for score rule ----------
+
+    # ---------- Helper function for score rule ----------
     def update_score(self, session, name_obj: Name, new_val: int, category: str):
         if category == "kill":
             current = name_obj.kill_score
@@ -45,8 +46,7 @@ class ScoringCog(commands.Cog):
             return new_val, diff, True
 
         return current, 0, False
-
-    # ---------- Add/Update Score ----------
+        # ---------- Add/Update Score ----------
     @app_commands.command(name="addscore", description="Add or update a score for a name (Admin only)")
     @app_commands.describe(category="Choose score type", name="Name to track", value="Value to add/update", showdiff="Show difference?")
     @app_commands.choices(category=[
@@ -85,24 +85,6 @@ class ScoringCog(commands.Cog):
                 await interaction.response.send_message(f"⚠️ Ignored update: {name} already has a higher or equal score ({current:,}).", ephemeral=True)
         finally:
             session.close()
-
-    # ---------- Remove Name ----------
-    @app_commands.command(name="removename", description="Remove a tracked name (Admin only)")
-    async def removename(self, interaction, name: str):
-        if not await self.is_admin(interaction):
-            await interaction.response.send_message("❌ Admins only.", ephemeral=True)
-            return
-        session = SessionLocal()
-        try:
-            obj = session.query(Name).filter_by(name=name).first()
-            if not obj:
-                await interaction.response.send_message("⚠️ Name not found.", ephemeral=True)
-                return
-            session.delete(obj)
-            session.commit()
-            await interaction.response.send_message(f"✅ Removed {name}.", ephemeral=True)
-        finally:
-            session.close()
             # ---------- Show Scores ----------
     @app_commands.command(name="showscores", description="Show scores as table or graph")
     @app_commands.describe(category="Choose score type", mode="Display as table or graph", showdiff="Show difference?")
@@ -134,22 +116,23 @@ class ScoringCog(commands.Cog):
             emoji = "🔥" if category.value == "kill" else "🛠"
 
             if mode.value == "table":
-                table_rows = []
+                table_lines = []
                 for i, (nm, val) in enumerate(sorted_data.items(), start=1):
                     name_obj = session.query(Name).filter_by(name=nm).first()
                     prev_hist = session.query(ScoreHistory).filter_by(name_id=name_obj.id, category=category.value).order_by(ScoreHistory.timestamp.desc()).offset(1).first()
                     prev_val = prev_hist.value if prev_hist else 0
                     diff = val - prev_val
                     if showdiff and showdiff.value == "yes":
-                        table_rows.append([f"#{i}", nm, f"{diff:+,}", emoji])
+                        line = f"#{i} {nm} {diff:+,} {emoji}"
                     else:
-                        table_rows.append([f"#{i}", nm, f"{val:,}", emoji])
+                        line = f"#{i} {nm} {val:,} {emoji}"
+                    table_lines.append(line)
 
-                headers = ["Rank", "Name", ("Δ" if (showdiff and showdiff.value == "yes") else "Score"), ""]
-                table_str = tabulate(table_rows, headers=headers)
-                embed = discord.Embed(title=f"{category.name} Table", description=f"```{table_str}```", color=0x00ffcc)
+                table_str = "\n".join(table_lines)
+                embed = discord.Embed(title=f"{category.name} Table", description=f"```\n{table_str}\n```", color=0x00ffcc)
                 await interaction.response.send_message(embed=embed)
             else:
+                # Graph logic unchanged
                 fig, ax = plt.subplots()
                 ax.bar(sorted_data.keys(), sorted_data.values())
                 ax.set_ylabel("Score")
@@ -160,5 +143,23 @@ class ScoringCog(commands.Cog):
                 plt.savefig(buf, format="png")
                 buf.seek(0)
                 await interaction.response.send_message(file=discord.File(buf, filename="graph.png"))
+        finally:
+            session.close()
+            # ---------- FILE: cogs/scoring.py (continued: removename) ----------
+    # ---------- Remove Name ----------
+    @app_commands.command(name="removename", description="Remove a tracked name (Admin only)")
+    async def removename(self, interaction, name: str):
+        if not await self.is_admin(interaction):
+            await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+            return
+        session = SessionLocal()
+        try:
+            obj = session.query(Name).filter_by(name=name).first()
+            if not obj:
+                await interaction.response.send_message("⚠️ Name not found.", ephemeral=True)
+                return
+            session.delete(obj)
+            session.commit()
+            await interaction.response.send_message(f"✅ Removed {name}.", ephemeral=True)
         finally:
             session.close()
