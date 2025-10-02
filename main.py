@@ -8,6 +8,8 @@ from discord.ext import commands
 from config import TOKEN
 from database import Base, engine
 from cogs import translation, scoring, export_import, utilities
+# Added allcommands cog
+from cogs import allcommands
 
 # ---------- Flask Setup ----------
 app = Flask(__name__)
@@ -33,6 +35,7 @@ async def load_cogs():
     await bot.add_cog(scoring.ScoringCog(bot))
     await bot.add_cog(export_import.ExportImportCog(bot))
     await bot.add_cog(utilities.UtilitiesCog(bot))
+    await bot.add_cog(allcommands.AllCommandsCog(bot))  # Load allcommands cog
 
 # ---------- Events ----------
 @bot.event
