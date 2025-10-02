@@ -129,7 +129,7 @@ class ScoringCog(commands.Cog):
                     table_lines.append(line)
 
                 table_str = "\n".join(table_lines)
-                embed = discord.Embed(title=f"{category.name} Table", description=f"```\n{table_str}\n```", color=0x00ffcc)
+                embed = discord.Embed(title=f"{category.name} Table", description=f"```\n{table_str}\n```", color=0x8B0000)
                 await interaction.response.send_message(embed=embed)
             else:
                 # Graph logic unchanged
