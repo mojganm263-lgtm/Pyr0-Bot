@@ -12,8 +12,7 @@ from cogs.utilities import split_long_message
 class ExportImportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    # ---------- Export CSV ----------
+        # ---------- Export CSV ----------
     @app_commands.command(name="exportcsv", description="Export scores to CSV")
     @app_commands.describe(category="Choose score type to export", showdiff="Include diff column?")
     @app_commands.choices(category=[
@@ -35,7 +34,7 @@ class ExportImportCog(commands.Cog):
             output = BytesIO()
             writer = csv.writer(output)
             if showdiff and showdiff.value == "yes":
-                writer.writerow(["Name", "Score", "Δ"])
+                writer.writerow(["Name", "Δ"])
             else:
                 writer.writerow(["Name", "Score"])
 
@@ -48,7 +47,7 @@ class ExportImportCog(commands.Cog):
                         diff = latest.value - prev.value
                     else:
                         diff = latest.value if latest else 0
-                    writer.writerow([n.name, f"{val:,}", f"{diff:,}"])
+                    writer.writerow([n.name, f"{diff:,}"])
                 else:
                     writer.writerow([n.name, f"{val:,}"])
 
@@ -56,8 +55,7 @@ class ExportImportCog(commands.Cog):
             await interaction.response.send_message(file=discord.File(output, filename=f"{category.value}_scores.csv"))
         finally:
             session.close()
-
-    # ---------- Import CSV ----------
+            # ---------- Import CSV ----------
     @app_commands.command(name="importcsv", description="Import scores from a CSV file (Admin only)")
     @app_commands.describe(category="kill or vs", showdiff="Expect diff column?")
     @app_commands.choices(showdiff=[
@@ -78,8 +76,6 @@ class ExportImportCog(commands.Cog):
                     continue
                 name = row[0].strip()
                 score_cell = row[1].strip()
-
-                # If showdiff and score has "(Δ...)", strip it
                 if "(" in score_cell:
                     score_cell = score_cell.split("(")[0].strip()
 
@@ -112,8 +108,7 @@ class ExportImportCog(commands.Cog):
             await interaction.response.send_message(f"✅ Imported into {category}. Updated: {updated}, Ignored: {ignored}", ephemeral=True)
         finally:
             session.close()
-
-    # ---------- Export Excel ----------
+            # ---------- Export Excel ----------
     @app_commands.command(name="exportexcel", description="Export scores to Excel")
     @app_commands.describe(category="Choose score type to export", showdiff="Include diff column?")
     @app_commands.choices(category=[
@@ -142,7 +137,7 @@ class ExportImportCog(commands.Cog):
                         diff = latest.value - prev.value
                     else:
                         diff = latest.value if latest else 0
-                    data.append({"Name": n.name, "Score": val, "Δ": diff})
+                    data.append({"Name": n.name, "Δ": diff})
                 else:
                     data.append({"Name": n.name, "Score": val})
 
@@ -170,8 +165,7 @@ class ExportImportCog(commands.Cog):
 
             for _, row in df.iterrows():
                 name = str(row["Name"])
-                score_cell = str(row["Score"]).strip()
-                # Strip parenthesized diff when present
+                score_cell = str(row.get("Score", "0")).strip()
                 if "(" in score_cell:
                     score_cell = score_cell.split("(")[0].strip()
 
